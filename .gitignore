@@ -1,3 +1,7 @@
+# 数据库与向量存储
+chroma_db/
+csv_clean/
+
 # 日志
 logs/
 *.log
