@@ -33,11 +33,14 @@ DigitalTwin/
 │   ├── app.py              # Flask 主服务，对话接口（路由层）
 │   ├── test_csv_final.py   # CSV 数据导入 & 嵌入生成脚本（ThreadPoolExecutor 并行嵌入，绕过 LangChain 直写 ChromaDB）
 │   ├── preprocess_csv      # csv文件预处理，包含去重
+│   ├── models/             # 数据模型
+│   │   ├── __init__.py
+│   │   └── chat_record_model.py  # 标准化聊天记录模型（支持多种CSV格式）
 │   ├── core/               # 核心业务逻辑
 │   │   ├── rag_service.py      # RAG 向量检索服务
 │   │   └── persona_manager.py  # 分身管理（personas.json CRUD）
 │   ├── utils/              # 通用工具函数
-│   │   ├── csv_loader.py       # 微信聊天记录 CSV 加载器
+│   │   ├── csv_loader.py       # 微信聊天记录 CSV 加载器（自动格式检测）
 │   │   └── tracking.py         # 增量导入跟踪（哈希去重）
 │   └── front/              # 前端静态文件（HTML/CSS/JS）
 ├── csv/                # 微信聊天记录 CSV 数据

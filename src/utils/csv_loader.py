@@ -1,8 +1,11 @@
 """
 微信聊天记录 CSV 加载器
+
+支持多种数据格式，自动检测并统一处理
 """
 
 import os
+import csv
 from pathlib import Path
 from datetime import datetime
 from typing import List, Set, Tuple, Optional
@@ -14,16 +17,116 @@ except ImportError:
         print(f"{desc}...")
         return iterable
 
-from langchain_community.document_loaders.csv_loader import CSVLoader
 from langchain_core.documents import Document
+from ..models.chat_record_model import ChatRecord, ChatRecordSchema
 
 
 class WeChatCSVLoader:
-    """自定义微信聊天记录CSV加载器"""
+    """自定义微信聊天记录CSV加载器
+
+    支持多种数据格式：
+    - WeChat标准格式：包含 MsgSvrID, type_name, room_name 等完整字段
+    - 简洁格式：仅包含 talker, msg, is_sender 等基本字段
+    """
 
     def __init__(self, csv_folder_path, encoding="utf-8"):
         self.csv_folder_path = Path(csv_folder_path)
         self.encoding = encoding
+
+    def _parse_csv_file(self, csv_file: Path) -> Tuple[str, List[ChatRecord], List[str]]:
+        """解析单个CSV文件
+
+        Returns:
+            (format_type, records, raw_rows)
+        """
+        records = []
+        raw_rows = []
+
+        with open(csv_file, 'r', encoding=self.encoding) as f:
+            # 检测格式
+            sample_lines = []
+            f.seek(0)
+            for _ in range(3):
+                sample_lines.append(f.readline())
+            f.seek(0)
+
+            reader = csv.DictReader(f)
+            if not reader.fieldnames:
+                raise ValueError("无法读取CSV文件头")
+
+            format_type = ChatRecordSchema.detect_format(reader.fieldnames)
+            if format_type == ChatRecordSchema.FORMAT_UNKNOWN:
+                raise ValueError(
+                    f"无法识别数据格式。检测到的字段: {reader.fieldnames}\n"
+                    f"必须包含以下之一：\n"
+                    f"1. 完整格式: id, MsgSvrID, type_name, is_sender, talker, msg, CreateTime\n"
+                    f"2. 简洁格式: is_sender, talker, msg"
+                )
+
+            # 逐行解析
+            for row in reader:
+                raw_rows.append(str(row))
+                try:
+                    record = ChatRecord.from_dict(row)
+                    records.append(record)
+                except ValueError as e:
+                    print(f"    ⚠️ 跳过无效行: {e}")
+                    continue
+
+        return format_type, records, raw_rows
+
+    def _should_skip_message(self, record: ChatRecord) -> bool:
+        """判断是否应该跳过此消息"""
+        msg = record.msg.strip()
+
+        # 过滤无效消息
+        if (len(msg) <= 2 or
+            msg.startswith('[') or
+            msg.startswith('表情') or
+            '动画表情' in (record.type_name or '') or
+            msg == "I've accepted your friend request. Now let's chat!" or
+            '<msg>' in msg):
+            return True
+
+        return False
+
+    def _record_to_document(self, record: ChatRecord, csv_filename: str) -> Document:
+        """将ChatRecord转换为LangChain Document"""
+
+        # 格式化消息内容
+        location = f"@{record.room_name}" if record.has_room() else ""
+        formatted_content = f"{record.talker}{location}: {record.msg}"
+
+        # 解析时间戳
+        chat_timestamp = 0
+        if record.has_time():
+            try:
+                chat_timestamp = int(datetime.fromisoformat(record.CreateTime).timestamp())
+            except Exception:
+                try:
+                    chat_timestamp = int(datetime.strptime(record.CreateTime, "%Y-%m-%d %H:%M:%S").timestamp())
+                except Exception:
+                    chat_timestamp = 0
+
+        # 构建Document的metadata
+        metadata = {
+            "source": csv_filename,
+            "chat_time": chat_timestamp,
+            "chat_time_str": record.CreateTime or "",
+            "sender": record.talker,
+            "msg_type": record.msg_type(),
+            "room": record.room_name or "",
+            "is_sender": record.is_sender,
+            "msg_content": record.msg[:200],
+        }
+
+        # 添加可选字段
+        if record.MsgSvrID:
+            metadata["MsgSvrID"] = record.MsgSvrID
+        if record.is_forward is not None:
+            metadata["is_forward"] = record.is_forward
+
+        return Document(page_content=formatted_content, metadata=metadata)
 
     def load(self, incremental=False, tracking_data=None, csv_pattern: str = None) -> Tuple[List[Document], Set[str]]:
         """加载所有CSV文件并返回文档列表
@@ -52,89 +155,49 @@ class WeChatCSVLoader:
         print(f"找到 {len(csv_files)} 个CSV文件（匹配: {pattern}）")
 
         for csv_file in tqdm(csv_files, desc="处理CSV文件"):
-            print(f"正在处理: {csv_file.name}")
-
-            loader = CSVLoader(
-                file_path=str(csv_file),
-                encoding=self.encoding,
-                csv_args={'delimiter': ','},
-                metadata_columns=['CreateTime', 'talker', 'msg', 'type_name', 'room_name', 'is_sender'],
-            )
+            print(f"\n正在处理: {csv_file.name}")
 
             try:
-                file_docs = loader.load()
+                format_type, records, _ = self._parse_csv_file(csv_file)
+                print(f"  检测到格式: {format_type}")
+
                 processed_count = 0
                 valid_count = 0
+                skipped_format_count = 0
 
-                for doc in file_docs:
+                for row_idx, record in enumerate(records, start=2):  # 从第2行开始（第1行是表头）
                     try:
-                        msg_content = doc.metadata.get('msg', '').strip()
-                        if not msg_content:
+                        # 检查消息是否应该被跳过
+                        if self._should_skip_message(record):
+                            skipped_format_count += 1
                             continue
 
-                        raw_time = doc.metadata.get('CreateTime', '')
-                        talker = doc.metadata.get('talker', '')
-                        type_name = doc.metadata.get('type_name', '')
-                        room_name = doc.metadata.get('room_name', '')
-                        is_sender = doc.metadata.get('is_sender', '0')
-                        row = doc.metadata.get('row', 0)
-
+                        # 增量导入：检查是否已经导入
                         if incremental:
                             record_hash = generate_record_hash(
-                                str(csv_file.name), row, raw_time, msg_content
+                                str(csv_file.name), row_idx,
+                                record.CreateTime or "", record.msg
                             )
                             if record_hash in tracking_data["imported_hashes"]:
                                 skipped_count += 1
                                 continue
                             new_hashes.add(record_hash)
 
-                        if (len(msg_content) <= 2 or
-                                msg_content.startswith('[') or
-                                msg_content.startswith('表情') or
-                                '动画表情' in type_name or
-                                msg_content == "I've accepted your friend request. Now let's chat!" or
-                                '<msg>' in msg_content):
-                            continue
-
-                        # 精简格式：去除冗余字段，保留对嵌入有价值的信息
-                        location = f"@{room_name}" if room_name else ""
-                        formatted_content = f"{talker}{location}: {msg_content}"
-
-                        chat_timestamp = 0
-                        if raw_time:
-                            try:
-                                chat_timestamp = int(datetime.fromisoformat(raw_time).timestamp())
-                            except Exception:
-                                try:
-                                    chat_timestamp = int(datetime.strptime(raw_time, "%Y-%m-%d %H:%M:%S").timestamp())
-                                except Exception:
-                                    chat_timestamp = 0
-
-                        new_doc = Document(
-                            page_content=formatted_content,
-                            metadata={
-                                "source": str(csv_file.name),
-                                "chat_time": chat_timestamp,
-                                "chat_time_str": raw_time,
-                                "sender": talker,
-                                "msg_type": type_name,
-                                "room": room_name,
-                                "is_sender": is_sender,
-                                "msg_content": msg_content[:200],
-                            }
-                        )
-                        documents.append(new_doc)
+                        # 转换为Document并添加到列表
+                        doc = self._record_to_document(record, csv_file.name)
+                        documents.append(doc)
                         valid_count += 1
 
-                    except Exception:
+                    except Exception as e:
+                        print(f"    ⚠️ 第 {row_idx} 行处理失败: {e}")
                         continue
 
                     processed_count += 1
 
-                print(f"  - 处理了 {processed_count} 条记录，有效记录 {valid_count} 条")
+                print(f"  - 处理了 {processed_count} 条记录，有效 {valid_count} 条，过滤 {skipped_format_count} 条")
 
             except Exception as e:
-                print(f"处理文件 {csv_file} 时出错: {e}")
+                print(f"  ❌ 处理文件时出错: {e}")
                 continue
 
         if incremental and skipped_count > 0:
