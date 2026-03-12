@@ -100,6 +100,12 @@ class Config:
     EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-v4")
     DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 
+    # RAG优化配置
+    LLM_API_BASE = os.getenv("LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode")
+    LLM_REWRITING_MODEL = os.getenv("LLM_REWRITING_MODEL", "qwen-plus")
+    RAG_QUERY_REWRITING_ENABLED = os.getenv("RAG_QUERY_REWRITING_ENABLED", "true").lower() == "true"
+    RAG_COREFERENCE_RESOLUTION_ENABLED = os.getenv("RAG_COREFERENCE_RESOLUTION_ENABLED", "true").lower() == "true"
+
     # 生成参数
     TEMPERATURE = 0.5
     TOP_P = 0.7
@@ -161,6 +167,10 @@ class RAGServiceManager:
                     embed_model=Config.EMBED_MODEL,
                     collection_name=persona["collection"],
                     persist_directory=Config.CHROMA_PERSIST_DIR,
+                    llm_api_base=Config.LLM_API_BASE,
+                    llm_rewriting_model=Config.LLM_REWRITING_MODEL,
+                    query_rewriting_enabled=Config.RAG_QUERY_REWRITING_ENABLED,
+                    coreference_resolution_enabled=Config.RAG_COREFERENCE_RESOLUTION_ENABLED,
                 )
                 self._services[pid] = svc
                 logger.info("RAGService 已为分身 '%s' 初始化（集合: %s）", persona["name"], persona["collection"])
@@ -187,6 +197,7 @@ def retrieve_rag_context(rag_service: RAGService, question: str, persona: Option
         rp = (persona or {}).get("rag_params", {})
         results = rag_service.search(
             query=question,
+            persona=persona,
             k=rp.get("k", Config.RAG_MAX_RESULTS),
             include_nearby=rp.get("include_nearby", True),
             time_window_minutes=rp.get("time_window_minutes", 30),
@@ -196,6 +207,7 @@ def retrieve_rag_context(rag_service: RAGService, question: str, persona: Option
         )
 
         if not results:
+            logger.info("  → RAG: 无检索结果")
             return None
 
         context = rag_service.format_context(
@@ -205,8 +217,10 @@ def retrieve_rag_context(rag_service: RAGService, question: str, persona: Option
         )
 
         if not context:
+            logger.info("  → RAG: 格式化上下文为空")
             return None
 
+        logger.info("  → RAG: 注入 %d 条聊天记录到提示词", len(results))
         return Config.RAG_SYSTEM_PREFIX + "\n" + context
 
     except Exception as e:

@@ -4,6 +4,8 @@ RAG向量数据库服务模块
 """
 
 import os
+import requests
+import json
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import chromadb
@@ -24,6 +26,10 @@ class RAGService:
         collection_name: str = "wechat_embeddings",
         persist_directory: str = "./chroma_db",
         embed_model: str = "text-embedding-v4",
+        llm_api_base: str = None,
+        llm_rewriting_model: str = None,
+        query_rewriting_enabled: bool = True,
+        coreference_resolution_enabled: bool = True,
     ):
         """
         初始化RAG服务
@@ -32,6 +38,11 @@ class RAGService:
             dashscope_api_key: DashScope API密钥
             collection_name: ChromaDB 集合名称
             persist_directory: ChromaDB 持久化目录（本地文件夹路径）
+            embed_model: 嵌入模型名称
+            llm_api_base: 大模型API基础URL（用于Query Rewriting和指代消解）
+            llm_rewriting_model: 用于改写的大模型名称
+            query_rewriting_enabled: 是否启用Query Rewriting
+            coreference_resolution_enabled: 是否启用指代消解
         """
         # 设置DashScope API密钥
         os.environ["DASHSCOPE_API_KEY"] = dashscope_api_key
@@ -39,6 +50,13 @@ class RAGService:
 
         self.collection_name = collection_name
         self.persist_directory = persist_directory
+
+        # 保存LLM配置（从参数或环境变量）
+        self.api_key = dashscope_api_key
+        self.llm_api_base = llm_api_base or os.getenv("LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode")
+        self.llm_rewriting_model = llm_rewriting_model or os.getenv("LLM_REWRITING_MODEL", "qwen-plus")
+        self.query_rewriting_enabled = query_rewriting_enabled
+        self.coreference_resolution_enabled = coreference_resolution_enabled
 
         # 初始化embedding模型
         self.embeddings = DashScopeEmbeddings(model=embed_model)
@@ -73,6 +91,143 @@ class RAGService:
     def is_connected(self) -> bool:
         """检查是否已连接"""
         return self.vectorstore is not None
+
+    def _call_llm_api(self, messages: List[Dict[str, str]]) -> Optional[str]:
+        """调用LLM API进行文本生成
+
+        Args:
+            messages: 消息列表，包含role和content
+
+        Returns:
+            生成的文本，失败返回None
+        """
+        try:
+            payload = {
+                "model": self.llm_rewriting_model,
+                "messages": messages,
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 500,
+                "stream": False,
+            }
+
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+
+            # 构建完整的API endpoint
+            api_base = self.llm_api_base.rstrip('/')
+            endpoint = f"{api_base}/v1/chat/completions"
+
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("choices") and len(data["choices"]) > 0:
+                    return data["choices"][0].get("message", {}).get("content", "").strip()
+            else:
+                logger.warning("LLM API返回错误: %d - %s", response.status_code, response.text[:200])
+        except Exception as e:
+            logger.warning("LLM API调用失败: %s", e)
+
+        return None
+
+    def _resolve_coreference(self, query: str, persona: Optional[Dict[str, Any]] = None) -> str:
+        """指代消解：将代词替换为具体的人名或概念
+
+        例如："他怎么看？" -> "张三怎么看？"
+
+        Args:
+            query: 原始查询
+            persona: 分身信息（包含名字等上下文）
+
+        Returns:
+            消解后的查询
+        """
+        if not self.coreference_resolution_enabled:
+            return query
+
+        # 如果问题中没有常见代词，直接返回
+        pronouns = ['他', '她', '它', '他们', '她们', '它们', '那个', '那些', '这个', '这些']
+        if not any(p in query for p in pronouns):
+            return query
+
+        persona_name = (persona or {}).get("name", "")
+        persona_info = f"分身名字：{persona_name}\n" if persona_name else ""
+
+        prompt = f"""{persona_info}你的任务是进行指代消解（Coreference Resolution）。
+
+将下面问题中的代词替换为具体的人名或概念，使问题更清楚。
+代词包括：他、她、它、他们、她们、它们、那个、这个等。
+
+如果代词指代不明确或根本不需要替换，保持原样。
+
+原问题：{query}
+
+请直接输出消解后的问题，不要解释。"""
+
+        messages = [{"role": "user", "content": prompt}]
+        result = self._call_llm_api(messages)
+
+        if result:
+            logger.debug("指代消解: '%s' -> '%s'", query, result)
+            return result
+
+        return query
+
+    def _rewrite_query(self, query: str, persona: Optional[Dict[str, Any]] = None) -> str:
+        """Query Rewriting：根据分身特点改写查询以提高检索质量
+
+        例如："你怎么样？" -> "身体、情绪、精神状态相关的讨论"
+
+        Args:
+            query: 原始查询（可能已消解代词）
+            persona: 分身信息（包含名字、特点等）
+
+        Returns:
+            改写后的查询
+        """
+        if not self.query_rewriting_enabled:
+            return query
+
+        persona_name = (persona or {}).get("name", "")
+        system_prompt = (persona or {}).get("system_prompt", "")
+        doc_count = (persona or {}).get("doc_count", 0)
+
+        persona_context = f"""分身信息：
+- 名字：{persona_name}
+- 已导入聊天记录数：{doc_count}条
+- 角色设定：{system_prompt[:200]}"""  # 只用前200字
+
+        prompt = f"""{persona_context}
+
+你的任务是改写用户的问题，使其更容易从分身的聊天历史中检索相关内容。
+
+原问题可能很短或表述模糊，你需要基于分身的特点和背景，将其扩展和转化为更有语义的形式。
+
+例如：
+- "你怎么样？" 对于林黛玉可能改写为：身体状况、健康、精神状态、情绪、病症
+- "最近在做什么？" 可能改写为：近期活动、日常事务、工作、业余爱好
+
+原问题：{query}
+
+请输出改写后的问题或关键词组合（用中文逗号分隔），使其更适合向量检索。
+不要添加额外说明，直接输出改写结果。"""
+
+        messages = [{"role": "user", "content": prompt}]
+        result = self._call_llm_api(messages)
+
+        if result:
+            logger.debug("Query改写: '%s' -> '%s'", query, result)
+            return result
+
+        return query
 
     def _get_nearby_records(
         self,
@@ -146,6 +301,7 @@ class RAGService:
     def search(
         self,
         query: str,
+        persona: Optional[Dict[str, Any]] = None,
         k: int = 15,
         similarity_threshold: float = 0.0,
         include_nearby: bool = True,
@@ -159,6 +315,7 @@ class RAGService:
 
         Args:
             query: 查询文本
+            persona: 分身信息（用于Query Rewriting和指代消解）
             k: MMR 最终返回结果数量(默认15)
             similarity_threshold: 保留参数，MMR 模式下不生效
             include_nearby: 是否包含时间相近的记录
@@ -177,6 +334,37 @@ class RAGService:
             return []
 
         try:
+            # ── 查询改写流程 ──────────────────────────────────
+            original_query = query
+            persona_name = (persona or {}).get("name", "未知")
+
+            logger.info("【RAG检索】原始问题: '%s' (分身: %s)", query, persona_name)
+
+            # 步骤1：指代消解
+            if self.coreference_resolution_enabled:
+                resolved_query = self._resolve_coreference(query, persona)
+                if resolved_query != query:
+                    logger.info("  ✓ 指代消解: '%s' → '%s'", query, resolved_query)
+                    query = resolved_query
+                else:
+                    logger.debug("  - 指代消解: 无代词需要消解")
+            else:
+                logger.debug("  - 指代消解: 已禁用")
+
+            # 步骤2：Query Rewriting
+            if self.query_rewriting_enabled:
+                rewritten_query = self._rewrite_query(query, persona)
+                if rewritten_query != original_query:
+                    logger.info("  ✓ Query改写: '%s' → '%s'", query, rewritten_query)
+                    query = rewritten_query
+                else:
+                    logger.debug("  - Query改写: 无改写内容")
+            else:
+                logger.debug("  - Query改写: 已禁用")
+
+            logger.info("  → 最终查询: '%s'", query)
+
+            # ── 向量检索 ────────────────────────────────────
             # 用 MMR 搜索替代纯相似度搜索，在相关性和多样性之间取平衡
             # fetch_k 先召回更多候选，再从中挑选差异最大的 k 条
             fetch_k = max(k * 4, 60)
@@ -219,7 +407,13 @@ class RAGService:
             # 按相似度分数排序并限制总数量
             formatted_results.sort(key=lambda x: x[2], reverse=True)
             result = formatted_results[:min(max_total_results, 50)]
-            logger.debug("RAG搜索完成: query='%s...', 返回 %d 条结果", query[:50], len(result))
+
+            # 统计结果来源
+            semantic_count = sum(1 for r in result if r[1].get('_result_source') == 'semantic')
+            temporal_count = sum(1 for r in result if r[1].get('_result_source') == 'temporal')
+
+            logger.info("  ✓ 检索完成: 返回 %d 条结果 (语义: %d, 时间相近: %d)",
+                       len(result), semantic_count, temporal_count)
             return result
 
         except Exception as e:
@@ -282,20 +476,16 @@ class RAGService:
             metadatas = sample_results.get("metadatas", []) or []
 
             senders = set()
-            msg_types = set()
             for metadata in metadatas:
                 if metadata:
-                    if 'sender' in metadata:
-                        senders.add(metadata['sender'])
-                    if 'msg_type' in metadata:
-                        msg_types.add(metadata['msg_type'])
+                    if 'talker' in metadata:
+                        senders.add(metadata['talker'])
 
             return {
                 "connected": True,
                 "total_records": count,
                 "sample_size": len(metadatas),
                 "unique_senders": list(senders),
-                "message_types": list(msg_types),
                 "is_approximate": count > sample_size,  # 采样未覆盖全量时标注近似
                 "database_host": "local",
                 "database_name": f"ChromaDB ({self.persist_directory})",

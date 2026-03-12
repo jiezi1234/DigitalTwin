@@ -111,18 +111,15 @@ class WeChatCSVLoader:
         # 构建Document的metadata
         metadata = {
             "source": csv_filename,
+            "talker": record.talker,
             "chat_time": chat_timestamp,
             "chat_time_str": record.CreateTime or "",
-            "sender": record.talker,
-            "msg_type": record.msg_type(),
             "room": record.room_name or "",
             "is_sender": record.is_sender,
             "msg_content": record.msg[:200],
         }
 
         # 添加可选字段
-        if record.MsgSvrID:
-            metadata["MsgSvrID"] = record.MsgSvrID
         if record.is_forward is not None:
             metadata["is_forward"] = record.is_forward
 
