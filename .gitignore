@@ -24,7 +24,7 @@ venv/
 
 # 文档（私人内容）
 doc/
-
+CLAUDE.md
 # IDE
 .vscode/
 .idea/
@@ -33,3 +33,4 @@ doc/
 
 # macOS
 .DS_Store
+

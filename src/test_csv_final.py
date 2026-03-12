@@ -34,7 +34,7 @@ pm = PersonaManager(CHROMA_PERSIST_DIR)
 llm = ChatTongyi(model=os.getenv("CHAT_MODEL", "qwen-plus"))
 
 
-def compute_max_tokens(docs, percentile=90, scale=1.5, minimum=30):
+def compute_max_tokens(docs, percentile=80, scale=1.5, minimum=30):
     """采样 self 消息长度，估算合适的 max_tokens。
 
     中文字符在 DashScope tokenizer 中约 1-1.5 token/字，乘以 scale 留余量。
