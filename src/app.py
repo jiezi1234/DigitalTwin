@@ -207,7 +207,7 @@ def retrieve_rag_context(rag_service: RAGService, question: str, persona: Option
         )
 
         if not results:
-            logger.info("  → RAG: 无检索结果")
+            logger.debug("  → RAG: 无检索结果")
             return None
 
         context = rag_service.format_context(
@@ -217,10 +217,10 @@ def retrieve_rag_context(rag_service: RAGService, question: str, persona: Option
         )
 
         if not context:
-            logger.info("  → RAG: 格式化上下文为空")
+            logger.debug("  → RAG: 格式化上下文为空")
             return None
 
-        logger.info("  → RAG: 注入 %d 条聊天记录到提示词", len(results))
+        logger.debug("  → RAG: 注入 %d 条聊天记录到提示词", len(results))
         return Config.RAG_SYSTEM_PREFIX + "\n" + context
 
     except Exception as e:
