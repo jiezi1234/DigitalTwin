@@ -1,6 +1,5 @@
 # 数据（由 git-lfs 管理，用 git add -f 手动提交）
 chroma_db/
-csv/
 csv_clean/
 
 # 日志

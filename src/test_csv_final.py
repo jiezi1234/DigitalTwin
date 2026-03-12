@@ -18,9 +18,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_community.embeddings.dashscope import DashScopeEmbeddings
 
-from core.persona_manager import PersonaManager
-from utils.csv_loader import WeChatCSVLoader
-from utils.tracking import load_import_tracking, save_import_tracking
+from .core.persona_manager import PersonaManager
+from .utils.csv_loader import WeChatCSVLoader
+from .utils.tracking import load_import_tracking, save_import_tracking
 
 # ChromaDB 本地持久化目录
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
