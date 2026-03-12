@@ -138,7 +138,7 @@ FLASK_PORT=8080
 2. （可选）运行预处理脚本，去重和过滤无效消息：
 
 ```bash
-python src/preprocess_csv.py
+python -m src.preprocess_csv
 ```
 
 预处理后的文件输出到 `csv_clean/` 目录。
@@ -146,7 +146,7 @@ python src/preprocess_csv.py
 3. 运行数据导入脚本（在项目根目录运行）：
 
 ```bash
-python src/test_csv_final.py
+python -m src.test_csv_final
 ```
 
 脚本会引导你选择或创建分身，并选择导入模式：
@@ -159,7 +159,7 @@ python src/test_csv_final.py
 ### 6. 启动服务器
 
 ```bash
-python src/app.py
+python -m src.app
 ```
 
 服务器将在 `http://localhost:8080` 启动。

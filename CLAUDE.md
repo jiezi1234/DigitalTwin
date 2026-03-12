@@ -18,10 +18,10 @@ mamba activate DT
 pip install -r requirements.txt
 
 # 导入聊天数据并生成向量嵌入（在项目根目录运行）
-python src/test_csv_final.py
+python -m src.test_csv_final
 
 # 启动主服务（在项目根目录运行）
-python src/app.py
+python -m src.app
 # 默认监听 0.0.0.0:8080
 ```
 
@@ -68,5 +68,6 @@ DigitalTwin/
 ## 文档索引
 
 - `README.md` — 完整部署指南、API 说明、架构图
+- `doc/数据模型说明` — 对系统用于导入向量数据库的CSV文件字段的说明
 - `doc/设计文档.docx` — 系统设计文档
 - `doc/数字分身_ppt展示.pptx` — 项目演示 PPT

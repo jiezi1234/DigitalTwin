@@ -77,12 +77,12 @@ logger = logging.getLogger(__name__)
 _stderr = sys.stderr
 try:
     sys.stderr = open(os.devnull, "w")
-    from core.rag_service import RAGService
+    from .core.rag_service import RAGService
 finally:
     sys.stderr.close()
     sys.stderr = _stderr
 
-from core.persona_manager import PersonaManager
+from .core.persona_manager import PersonaManager
 
 # 配置Flask应用，指定静态文件夹和模板文件夹
 app = Flask(__name__,
