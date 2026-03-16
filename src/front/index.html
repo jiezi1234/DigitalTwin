@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>数字分身</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+
+    <div class="side-panel" aria-label="侧边栏">
+      <div class="brand">
+        <div class="logo">AI</div>
+        <div>
+          <h1>数字分身</h1>
+          <div class="muted">version1.0</div>
+        </div>
+      </div>
+
+      <!-- 侧边栏标签页 -->
+      <div class="sidebar-tabs">
+        <div class="sidebar-tab active" data-tab="chat">对话</div>
+      </div>
+
+      <!-- 侧边栏内容区 -->
+      <div class="sidebar-content">
+        <!-- 历史会话区域 -->
+        <div class="history-section">
+          <div class="section-header">
+            <div class="section-title">历史会话</div>
+            <div class="section-action">清空</div>
+          </div>
+
+          <div class="bots" id="botsList" role="list">
+            <!-- JS will render bots here -->
+          </div>
+        </div>
+
+
+
+        <div class="side-footer">已保存机器人：<span id="botCount">0</span></div>
+        <button id="newChatBtn" class="btn" style="margin-top: 12px; width: 100%; background: linear-gradient(135deg, var(--accent), #4aa3ff); color: white; border: none; padding: 12px 0; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 12px rgba(0, 0, 0, 0.1)'" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 6px rgba(0, 0, 0, 0.05)'" title="选择分身开始对话"> 选择分身</button>
+      </div>
+    </div>
+
+    <div class="main">
+      <div class="topbar">
+        <div class="title">聊天</div>
+        <div class="controls">
+          <button id="exportJsonBtn" class="btn" title="导出 JSON">导出JSON</button>
+          <button id="exportTxtBtn" class="btn" title="导出 TXT">导出TXT</button>
+          <button id="clearHistoryBtn" class="btn" title="清除历史消息">🗑️ 清除历史</button>
+          <button id="themeToggle" class="btn" title="切换主题">🌙</button>
+          <button id="langToggle" class="btn" title="语音识别语言">🌐 中</button>
+        </div>
+      </div>
+
+      <div class="chat-area">
+        <div class="content-scroll" id="contentScroll">
+
+          <!-- Welcome view (centered) -->
+          <div class="welcome" id="welcomeCard">
+            <h2 style="font-size: 40px; font-style: 仿宋; color: rgb(56, 137, 199); font-weight: bold;">你好~ </h2>
+            <p>我是你构建的数字分身，快来和我聊天吧</p>
+
+            <div class="suggestions" id="suggestions">
+              <!-- JS 插入示例按钮 -->
+            </div>
+
+            <div class="center-input">
+              <button id="centerMic" class="icon-btn" title="语音输入（点击开始/停止）">🎤</button>
+
+              <input id="centerInput" class="input" placeholder="输入消息，或点击示例问题...">
+
+              <label class="icon-btn" title="上传文件">
+                📎
+                <input class="file-input" id="centerFile" type="file">
+              </label>
+
+              <button id="centerSend" class="icon-btn" title="发送">➤</button>
+            </div>
+
+            <div class="muted" style="font-size:13px;margin-top:16px">选择侧边栏分身或直接发送文字</div>
+          </div>
+
+          <!-- Chat messages (hidden initially) -->
+          <div class="messages-wrap hidden" id="chatView" aria-live="polite">
+            <div class="messages" id="messages"></div>
+            <div class="muted" style="text-align:center;padding:8px 0;font-size:13px">聊天中 · 会话保存在本地（刷新页面会保留会话）</div>
+          </div>
+
+        </div>
+
+        <!-- Bottom input dock (visible when chatting) -->
+        <div class="input-dock hidden" id="inputDock">
+          <div class="box">
+            <button id="dockMic" class="icon-btn" title="语音输入（点击开始/停止）">🎤</button>
+            <input type="text" id="dockInput" class="input" placeholder="输入消息并回车发送..." autocomplete="off">
+            <label class="icon-btn" title="上传文件">📎<input class="file-input" id="dockFile" type="file"></label>
+            <button id="dockSend" class="icon-btn">➤</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- 分身选择 Modal -->
+  <div id="personaModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box">
+      <h3>选择分身</h3>
+      <div id="personaList" class="persona-list">
+        <!-- JS 填充 -->
+      </div>
+      <button id="modalClose" class="btn" style="margin-top:12px;width:100%">取消</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

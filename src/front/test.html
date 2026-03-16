@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>测试机器人列表</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    .bot { padding: 10px; margin: 5px; border: 1px solid #ccc; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>机器人列表</h1>
+  <div id="botList"></div>
+  
+  <script>
+    // 测试代码 - 模拟script.js中的数据
+    const defaultBots = [
+      { id: 1, name: '小任同学', style: 'funny' },
+    ];
+    
+    // 显示机器人列表
+    const botListEl = document.getElementById('botList');
+    defaultBots.forEach(bot => {
+      const botEl = document.createElement('div');
+      botEl.className = 'bot';
+      botEl.innerHTML = `
+        <strong>ID: ${bot.id}</strong><br>
+        名称: ${bot.name}<br>
+        风格: ${bot.style}
+      `;
+      botListEl.appendChild(botEl);
+    });
+    
+    console.log('机器人总数:', defaultBots.length);
+    console.log('机器人列表:', defaultBots);
+  </script>
+</body>
+</html>

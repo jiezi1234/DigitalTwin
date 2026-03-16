@@ -1,0 +1,35 @@
+# 数据（由 git-lfs 管理，用 git add -f 手动提交）
+chroma_db/
+csv_clean/
+
+# 日志
+logs/
+*.log
+
+# 环境与配置
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+
+# 文档（私人内容）
+doc/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
