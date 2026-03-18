@@ -1,122 +1,120 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>数字分身</title>
-  <link rel="preconnect" href="https://fonts.gstatic.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&amp;display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Digital Twin</title>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/languages/sql.min.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="app">
 
-    <div class="side-panel" aria-label="侧边栏">
-      <div class="brand">
-        <div class="logo">AI</div>
-        <div>
+  <!-- WebGL Shader Background -->
+  <div id="webglBg"></div>
+
+  <!-- Tech Labels -->
+  <div class="tech-label tl-top-left">SYS.CORE // ON-LINE</div>
+  <div class="tech-label tl-bottom-right">DIGITAL_TWIN_V1.0</div>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon"><i class="ph ph-brain"></i></span>
+      <span class="brand-name">DIGITAL TWIN</span>
+    </div>
+    <div class="toolbar">
+      <button class="tool-btn" id="exportBtn" title="导出对话"><i class="ph ph-export"></i></button>
+      <span class="ver-tag">V1.0</span>
+      <button class="tool-btn theme-btn" id="themeBtn">
+        <i class="ph ph-moon" id="themeIcon"></i>
+        <span id="themeLbl">DARK</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- App Layout -->
+  <div class="app-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sb-head"><div class="badge mono">SESSIONS</div></div>
+      <div class="sb-list" id="sbList"></div>
+      <div class="sb-foot">
+        <button class="btn-accent" id="btnNewPersona">
+          <i class="ph ph-plus-circle"></i> 选择分身
+        </button>
+        <button class="btn-outline" id="btnNewTutor">
+          <i class="ph ph-book-open-text"></i> 数字助教
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+
+      <!-- Welcome View -->
+      <div class="view-welcome" id="viewWelcome">
+        <div class="welcome-card">
+          <div class="badge mono">DIGITAL.TWIN</div>
           <h1>数字分身</h1>
-          <div class="muted">version1.0</div>
+          <p class="sub-text">选择一个分身，开始对话</p>
+          <div class="wc-grid" id="wcGrid"></div>
+          <div class="wc-input-row">
+            <input type="text" id="wcInput" class="pill-input" placeholder="或直接输入消息...">
+            <button class="btn-send" id="wcSend"><i class="ph ph-arrow-right"></i></button>
+          </div>
         </div>
       </div>
 
-      <!-- 侧边栏标签页 -->
-      <div class="sidebar-tabs">
-        <div class="sidebar-tab active" data-tab="chat">对话</div>
-      </div>
-
-      <!-- 侧边栏内容区 -->
-      <div class="sidebar-content">
-        <!-- 历史会话区域 -->
-        <div class="history-section">
-          <div class="section-header">
-            <div class="section-title">历史会话</div>
-            <div class="section-action">清空</div>
+      <!-- Chat View -->
+      <div class="view-chat hidden" id="viewChat">
+        <div class="chat-bar">
+          <button class="tool-btn mobile-only" id="menuBtn"><i class="ph ph-list"></i></button>
+          <div class="chat-title">
+            <span class="chat-name" id="chatName">对话</span>
+            <span class="badge mono sm" id="chatBadge"></span>
           </div>
-
-          <div class="bots" id="botsList" role="list">
-            <!-- JS will render bots here -->
+          <div class="chat-bar-actions">
+            <button class="tool-btn" id="clearBtn" title="清除历史"><i class="ph ph-trash"></i></button>
           </div>
         </div>
-
-
-
-        <div class="side-footer">已保存机器人：<span id="botCount">0</span></div>
-        <button id="newChatBtn" class="btn" style="margin-top: 12px; width: 100%; background: linear-gradient(135deg, var(--accent), #4aa3ff); color: white; border: none; padding: 12px 0; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 12px rgba(0, 0, 0, 0.1)'" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 6px rgba(0, 0, 0, 0.05)'" title="选择分身开始对话"> 选择分身</button>
-      </div>
-    </div>
-
-    <div class="main">
-      <div class="topbar">
-        <div class="title">聊天</div>
-        <div class="controls">
-          <button id="exportJsonBtn" class="btn" title="导出 JSON">导出JSON</button>
-          <button id="exportTxtBtn" class="btn" title="导出 TXT">导出TXT</button>
-          <button id="clearHistoryBtn" class="btn" title="清除历史消息">🗑️ 清除历史</button>
-          <button id="themeToggle" class="btn" title="切换主题">🌙</button>
-          <button id="langToggle" class="btn" title="语音识别语言">🌐 中</button>
+        <div class="chat-scroll" id="chatScroll">
+          <div class="chat-messages" id="chatMessages"></div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input-box">
+            <button class="icon-btn" id="micBtn" title="语音输入"><i class="ph ph-microphone"></i></button>
+            <textarea id="chatInput" class="pill-input" placeholder="输入消息..." rows="1"></textarea>
+            <label class="icon-btn" title="上传文件">
+              <i class="ph ph-paperclip"></i>
+              <input type="file" id="fileInput" hidden>
+            </label>
+            <button class="btn-send" id="chatSendBtn"><i class="ph ph-arrow-right"></i></button>
+          </div>
         </div>
       </div>
 
-      <div class="chat-area">
-        <div class="content-scroll" id="contentScroll">
-
-          <!-- Welcome view (centered) -->
-          <div class="welcome" id="welcomeCard">
-            <h2 style="font-size: 40px; font-style: 仿宋; color: rgb(56, 137, 199); font-weight: bold;">你好~ </h2>
-            <p>我是你构建的数字分身，快来和我聊天吧</p>
-
-            <div class="suggestions" id="suggestions">
-              <!-- JS 插入示例按钮 -->
-            </div>
-
-            <div class="center-input">
-              <button id="centerMic" class="icon-btn" title="语音输入（点击开始/停止）">🎤</button>
-
-              <input id="centerInput" class="input" placeholder="输入消息，或点击示例问题...">
-
-              <label class="icon-btn" title="上传文件">
-                📎
-                <input class="file-input" id="centerFile" type="file">
-              </label>
-
-              <button id="centerSend" class="icon-btn" title="发送">➤</button>
-            </div>
-
-            <div class="muted" style="font-size:13px;margin-top:16px">选择侧边栏分身或直接发送文字</div>
-          </div>
-
-          <!-- Chat messages (hidden initially) -->
-          <div class="messages-wrap hidden" id="chatView" aria-live="polite">
-            <div class="messages" id="messages"></div>
-            <div class="muted" style="text-align:center;padding:8px 0;font-size:13px">聊天中 · 会话保存在本地（刷新页面会保留会话）</div>
-          </div>
-
-        </div>
-
-        <!-- Bottom input dock (visible when chatting) -->
-        <div class="input-dock hidden" id="inputDock">
-          <div class="box">
-            <button id="dockMic" class="icon-btn" title="语音输入（点击开始/停止）">🎤</button>
-            <input type="text" id="dockInput" class="input" placeholder="输入消息并回车发送..." autocomplete="off">
-            <label class="icon-btn" title="上传文件">📎<input class="file-input" id="dockFile" type="file"></label>
-            <button id="dockSend" class="icon-btn">➤</button>
-          </div>
-        </div>
-
-      </div>
-    </div>
+    </main>
   </div>
 
-  <!-- 分身选择 Modal -->
-  <div id="personaModal" class="modal hidden">
+  <!-- Mobile Sidebar Overlay -->
+  <div class="sb-overlay" id="sbOverlay"></div>
+
+  <!-- Persona Selection Modal -->
+  <div class="modal hidden" id="personaModal">
     <div class="modal-backdrop"></div>
-    <div class="modal-box">
-      <h3>选择分身</h3>
-      <div id="personaList" class="persona-list">
-        <!-- JS 填充 -->
-      </div>
-      <button id="modalClose" class="btn" style="margin-top:12px;width:100%">取消</button>
+    <div class="modal-panel">
+      <div class="badge mono">SELECT.PERSONA</div>
+      <h2>选择分身</h2>
+      <p class="sub-text">选择一个数字分身开始对话</p>
+      <div class="persona-list" id="personaList"></div>
+      <button class="btn-ghost" id="modalCloseBtn">取消</button>
     </div>
   </div>
 

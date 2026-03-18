@@ -382,7 +382,7 @@ class RAGService:
                     formatted_results.append((
                         doc.page_content,
                         {**doc.metadata, '_result_source': 'semantic'},
-                        1.0
+                        1.0  # MMR 接口不返回相似度分数，统一设为 1.0 作为占位
                     ))
 
                 # 如果启用了 nearby 功能，获取时间相近的记录
@@ -458,6 +458,7 @@ class RAGService:
             total_length += len(record)
 
         return "\n".join(lines)
+
 
     def get_stats(self) -> Dict[str, Any]:
         """获取数据库统计信息"""

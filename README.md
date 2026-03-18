@@ -151,8 +151,7 @@ CHROMA_COLLECTION=wechat_embeddings
 SELF_RAG_ENABLED=false
 SELF_RAG_BACKEND=auto          # auto | hf | qwen
 SELF_RAG_CRITIQUE_ENABLED=true # 是否启用生成质量评估（IsSup + IsUse）
-HF_MODEL_NAME=selfrag/selfrag_llama2_7b  # HF 本地模型名（需 transformers + torch）
-HF_DEVICE=auto                 # auto | cpu | cuda
+HF_TOKEN=                      # HuggingFace token（使用 HF 后端时必填）
 
 # Flask服务配置
 FLASK_HOST=0.0.0.0
@@ -172,7 +171,7 @@ python -m src.preprocess_csv
 
 预处理后的文件输出到 `csv_clean/` 目录。
 
-3. 运行数据导入脚本（在项目根目录运行）：
+1. 运行数据导入脚本（在项目根目录运行）：
 
 ```bash
 python -m src.test_csv_final
@@ -297,6 +296,7 @@ A: 可以通过 `personas.json` 中各分身的 `rag_params` 和 `model_params` 
 ### Q: Self-RAG 是什么？如何启用？
 
 A: Self-RAG（Self-Reflective Retrieval-Augmented Generation）是一种增强的 RAG 机制，系统会自主判断是否需要检索、评估检索结果的相关性、并验证生成结果的质量。在 `.env` 中设置 `SELF_RAG_ENABLED=true` 即可启用。支持三种后端模式：
+
 - `auto`（默认）：优先尝试 HuggingFace selfrag 模型，失败自动回退到 Qwen prompt 模拟
-- `hf`：使用本地 HuggingFace selfrag 模型（需安装 `transformers` + `torch`，模型约 13GB，首次使用自动下载）
+- `hf`：仅使用 HuggingFace 模型（需配置 `HF_TOKEN`）
 - `qwen`：使用通义千问 prompt engineering 模拟反思流程

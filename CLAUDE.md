@@ -21,9 +21,14 @@ pip install -r requirements.txt
 # 导入聊天数据并生成向量嵌入（在项目根目录运行）
 python -m src.test_csv_final
 
+# 导入课本PDF到向量数据库（数字助教）
+python -m src.import_textbook
+
 # 启动主服务（在项目根目录运行）
 python -m src.app
 # 默认监听 0.0.0.0:8080
+# 数字分身（统一页面，含助教切换）: http://localhost:8080
+# 数字助教（独立页面）: http://localhost:8080/tutor
 ```
 
 ## 项目结构
@@ -39,11 +44,14 @@ DigitalTwin/
 │   │   └── chat_record_model.py  # 标准化聊天记录模型（支持多种CSV格式）
 │   ├── core/               # 核心业务逻辑
 │   │   ├── rag_service.py      # RAG 向量检索服务
+│   │   ├── self_rag.py         # Self-RAG 反思增强检索（支持 HF / Qwen 双后端）
+│   │   ├── textbook_rag_service.py  # 课本RAG检索服务（数字助教）
 │   │   └── persona_manager.py  # 分身管理（personas.json CRUD）
 │   ├── utils/              # 通用工具函数
 │   │   ├── csv_loader.py       # 微信聊天记录 CSV 加载器（自动格式检测）
+│   │   ├── doc_loader.py       # PDF文档加载器（数字助教）
 │   │   └── tracking.py         # 增量导入跟踪（哈希去重）
-│   └── front/              # 前端静态文件（HTML/CSS/JS）
+│   └── front/              # 前端静态文件（AURA 风格，数字分身+助教统一页面）
 ├── csv/                # 微信聊天记录 CSV 数据
 ├── csv_clean/          # 预处理后的 CSV 数据
 ├── chroma_db/          # ChromaDB 本地持久化目录（含 personas.json）
@@ -63,7 +71,7 @@ DigitalTwin/
 | 向量数据库 | ChromaDB（本地持久化） |
 | 嵌入模型 | DashScope text-embedding-v4（每次 API 请求上限 10 条）|
 | RAG 框架 | LangChain（langchain-chroma、langchain-community） |
-| 前端 | 原生 HTML/CSS/JS，无框架 |
+| 前端 | 原生 HTML/CSS/JS（AURA 设计风格，Three.js WebGL 背景，Phosphor Icons） |
 | 环境管理 | Conda（使用miniforge  环境名：DT） |
 
 ## 文档索引
