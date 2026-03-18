@@ -338,13 +338,13 @@ class RAGService:
             original_query = query
             persona_name = (persona or {}).get("name", "未知")
 
-            logger.debug("【RAG检索】原始问题: '%s' (分身: %s)", query, persona_name)
+            logger.info("【RAG检索】原始问题: '%s' (分身: %s)", query, persona_name)
 
             # 步骤1：指代消解
             if self.coreference_resolution_enabled:
                 resolved_query = self._resolve_coreference(query, persona)
                 if resolved_query != query:
-                    logger.debug("  ✓ 指代消解: '%s' → '%s'", query, resolved_query)
+                    logger.info("  ✓ 指代消解: '%s' → '%s'", query, resolved_query)
                     query = resolved_query
                 else:
                     logger.debug("  - 指代消解: 无代词需要消解")
@@ -355,14 +355,14 @@ class RAGService:
             if self.query_rewriting_enabled:
                 rewritten_query = self._rewrite_query(query, persona)
                 if rewritten_query != original_query:
-                    logger.debug("  ✓ Query改写: '%s' → '%s'", query, rewritten_query)
+                    logger.info("  ✓ Query改写: '%s' → '%s'", query, rewritten_query)
                     query = rewritten_query
                 else:
                     logger.debug("  - Query改写: 无改写内容")
             else:
                 logger.debug("  - Query改写: 已禁用")
 
-            logger.debug("  → 最终查询: '%s'", query)
+            logger.info("  → 最终查询: '%s'", query)
 
             # ── 向量检索 ────────────────────────────────────
             # 用 MMR 搜索替代纯相似度搜索，在相关性和多样性之间取平衡
@@ -382,7 +382,7 @@ class RAGService:
                     formatted_results.append((
                         doc.page_content,
                         {**doc.metadata, '_result_source': 'semantic'},
-                        1.0
+                        1.0  # MMR 接口不返回相似度分数，统一设为 1.0 作为占位
                     ))
 
                 # 如果启用了 nearby 功能，获取时间相近的记录
@@ -412,7 +412,7 @@ class RAGService:
             semantic_count = sum(1 for r in result if r[1].get('_result_source') == 'semantic')
             temporal_count = sum(1 for r in result if r[1].get('_result_source') == 'temporal')
 
-            logger.debug("  ✓ 检索完成: 返回 %d 条结果 (语义: %d, 时间相近: %d)",
+            logger.info("  ✓ 检索完成: 返回 %d 条结果 (语义: %d, 时间相近: %d)",
                        len(result), semantic_count, temporal_count)
             return result
 
@@ -458,6 +458,7 @@ class RAGService:
             total_length += len(record)
 
         return "\n".join(lines)
+
 
     def get_stats(self) -> Dict[str, Any]:
         """获取数据库统计信息"""

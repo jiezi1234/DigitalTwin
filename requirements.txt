@@ -9,3 +9,6 @@ langchain-chroma
 langchain-community
 dashscope
 
+# 文档解析（数字助教）
+pymupdf
+

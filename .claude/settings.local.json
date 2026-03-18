@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod u+w \"D:/xuexi/competition/DigitalTwin/.env\" && chmod u+w \"D:/xuexi/competition/DigitalTwin/.env.example\" 2>/dev/null; echo \"done\")",
+      "Bash(cd \"D:/xuexi/competition/DigitalTwin\" && python -c \"import ast; ast.parse\\(open\\('src/core/self_rag.py', encoding='utf-8'\\).read\\(\\)\\); print\\('self_rag.py: OK'\\)\" && python -c \"import ast; ast.parse\\(open\\('src/app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('app.py: OK'\\)\")",
+      "Bash(cd \"D:/xuexi/competition/DigitalTwin\" && mamba run -n DT python -m src.app 2>&1)",
+      "Bash(which conda:*)",
+      "Read(//c/Users/Administrator/miniforge3/condabin/**)",
+      "Read(//c/Users/Administrator/miniforge3/Scripts/**)",
+      "Read(//d/xuexi/competition/DigitalTwin/$USERPROFILE/miniforge3/condabin/**)",
+      "Read(//c/Users/Administrator/**)",
+      "Read(//d/miniforge3/condabin/**)",
+      "Read(//d/Miniforge3/condabin/**)",
+      "Read(//c/miniforge3/condabin/**)",
+      "Bash(cmd.exe /c \"where mamba\")",
+      "Bash(cmd.exe /c \"where mamba 2>nul\" 2>/dev/null; cmd.exe /c \"where conda 2>nul\" 2>/dev/null; cmd.exe /c \"where python 2>nul\" 2>/dev/null)",
+      "Read(//d/xuexi/miniforge3/Scripts/**)",
+      "Read(//d/xuexi/miniforge3/condabin/**)",
+      "Bash(find /c/Users/Administrator -maxdepth 5 -path */DT/python.exe)",
+      "Bash(find /c/Users/Administrator -maxdepth 5 -path */envs/DT*)",
+      "Bash(powershell.exe -NoProfile -Command \"Get-Command mamba -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source; Get-Command conda -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source; Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Read(//d/python/python/envs/**)",
+      "Read(//d/python/envs/**)",
+      "Read(//d/python/python//**)",
+      "Bash(ls /d/python/python/Scripts/conda* 2>/dev/null; ls /d/python/python/Scripts/mamba* 2>/dev/null; ls /d/python/python/Scripts/pip* 2>/dev/null | head -3)",
+      "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem -Path 'D:\\\\' -Recurse -Depth 3 -Filter 'mamba.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName; Get-ChildItem -Path 'C:\\\\Users\\\\Administrator' -Recurse -Depth 4 -Filter 'mamba.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
+      "Bash(powershell.exe -NoProfile -Command \"Get-ChildItem -Path 'C:\\\\','D:\\\\' -Recurse -Depth 4 -Filter 'conda.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName\")",
+      "Bash(\"/d/Tools/jupyter_book/Scripts/conda.exe\" info:*)",
+      "Bash(/d/python/python/python.exe -c \"import flask; import chromadb; import dotenv; print\\('deps OK'\\)\" 2>&1)",
+      "Bash(cd \"D:/xuexi/competition/DigitalTwin\" && /d/python/python/python.exe -m src.app 2>&1)",
+      "Bash(curl -s -X POST http://127.0.0.1:8080/chat -H \"Content-Type: application/json\" -d '{\"message\": \"你好\", \"session_id\": \"test1\"}' 2>&1)",
+      "Bash(curl -s -X POST http://127.0.0.1:8080/chat -H \"Content-Type: application/json; charset=utf-8\" --data-raw \"{\\\\\"message\\\\\": \\\\\"hello\\\\\", \\\\\"session_id\\\\\": \\\\\"test1\\\\\"}\" 2>&1)",
+      "Bash(curl -s -X POST http://127.0.0.1:8080/chat -H \"Content-Type: application/json; charset=utf-8\" --data-raw \"{\\\\\"message\\\\\": \\\\\"what did you talk about recently\\\\\", \\\\\"session_id\\\\\": \\\\\"test2\\\\\"}\" 2>&1)",
+      "Bash(curl -s http://127.0.0.1:8080/health 2>&1)",
+      "Bash(cd \"D:/xuexi/competition/DigitalTwin\" && /d/python/python/python.exe -c \"import ast; ast.parse\\(open\\('src/core/self_rag.py', encoding='utf-8'\\).read\\(\\)\\); print\\('self_rag.py: OK'\\)\" && /d/python/python/python.exe -c \"import ast; ast.parse\\(open\\('src/app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('app.py: OK'\\)\")",
+      "Bash(curl -s -X POST http://127.0.0.1:8080/chat -H \"Content-Type: application/json; charset=utf-8\" --data-raw \"{\\\\\"message\\\\\": \\\\\"hello\\\\\", \\\\\"session_id\\\\\": \\\\\"test3\\\\\"}\" 2>&1)",
+      "Bash(cd D:/xuexi/competition/DigitalTwin && python -c \"import ast; ast.parse\\(open\\('src/core/self_rag.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('src/core/self_rag.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(cd D:/xuexi/competition/DigitalTwin && python -c \"import py_compile; py_compile.compile\\('src/core/self_rag.py', doraise=True\\); print\\('Syntax OK'\\)\")"
+    ]
+  }
+}
