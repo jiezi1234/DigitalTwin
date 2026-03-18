@@ -19,7 +19,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "opentelemetry-api>=1.21.0",
     "opentelemetry-sdk>=1.21.0",
-    "opentelemetry-exporter-trace-otlp>=0.42b0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.21.0",
 ]
 
 [project.optional-dependencies]
@@ -30,3 +30,7 @@ dev = [
     "isort>=5.12.0",
     "mypy>=1.5.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
