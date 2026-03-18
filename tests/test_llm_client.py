@@ -81,3 +81,68 @@ def test_llm_client_with_telemetry(mock_env):
             )
 
             assert result == "test response"
+
+
+def test_llm_client_call_empty_content(mock_env):
+    """处理空内容响应"""
+    client = LLMClient()
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": ""}}]
+        }
+        mock_post.return_value = mock_response
+
+        # Empty string should be handled gracefully
+        result = client.call(
+            messages=[{"role": "user", "content": "test"}],
+            temperature=0.7,
+            max_tokens=100,
+        )
+
+        # Empty content is still valid, just returns empty string
+        assert result == ""
+
+
+def test_llm_client_call_missing_message_key(mock_env):
+    """处理缺少 message 键的响应"""
+    client = LLMClient()
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{}]  # Missing 'message' key
+        }
+        mock_post.return_value = mock_response
+
+        result = client.call(
+            messages=[{"role": "user", "content": "test"}],
+            temperature=0.7,
+            max_tokens=100,
+        )
+
+        # Should return empty string for malformed response (graceful degradation)
+        assert result == ""
+
+
+def test_llm_client_call_http_error(mock_env):
+    """处理 HTTP 错误响应"""
+    client = LLMClient()
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 429  # Rate limit error
+        mock_response.text = "Rate limit exceeded"
+        mock_post.return_value = mock_response
+
+        result = client.call(
+            messages=[{"role": "user", "content": "test"}],
+            temperature=0.7,
+            max_tokens=100,
+        )
+
+        # Should return None for HTTP errors
+        assert result is None
