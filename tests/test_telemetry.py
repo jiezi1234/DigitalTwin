@@ -29,7 +29,37 @@ def test_get_tracer_returns_valid_tracer():
 
 def test_tracer_filtering_by_level():
     """不同的追踪级别应该过滤不同的 span"""
+    # Test light level
     with patch.dict(os.environ, {"OTEL_ENABLED": "true", "OTEL_TRACE_LEVEL": "light"}):
         manager = TelemetryManager()
-        # light 级别应该只包含高层操作
-        assert "light" in manager.trace_level
+        assert manager.should_trace("llm.api_call") is True
+        assert manager.should_trace("db.vector_search") is True
+        assert manager.should_trace("rag.search") is False  # Not in light level
+
+    # Test full level
+    with patch.dict(os.environ, {"OTEL_ENABLED": "true", "OTEL_TRACE_LEVEL": "full"}):
+        manager = TelemetryManager()
+        assert manager.should_trace("llm.api_call") is True
+        assert manager.should_trace("rag.search") is True  # In full level
+        assert manager.should_trace("unknown.span") is False
+
+
+def test_tracer_filtering_custom_patterns():
+    """自定义追踪模式"""
+    with patch.dict(os.environ, {
+        "OTEL_ENABLED": "true",
+        "OTEL_TRACE_LEVEL": "custom",
+        "OTEL_CUSTOM_SPAN_PATTERNS": "llm.api_call,db.vector_search"
+    }):
+        manager = TelemetryManager()
+        assert manager.should_trace("llm.api_call") is True
+        assert manager.should_trace("db.vector_search") is True
+        assert manager.should_trace("rag.search") is False
+
+
+def test_telemetry_shutdown():
+    """测试关闭功能"""
+    with patch.dict(os.environ, {"OTEL_ENABLED": "true"}):
+        manager = TelemetryManager()
+        # Should not raise any exceptions
+        manager.shutdown()

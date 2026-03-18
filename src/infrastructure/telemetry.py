@@ -5,7 +5,8 @@ OpenTelemetry 配置和初始化模块
 
 import os
 import logging
-from typing import Optional, Set
+import threading
+from typing import Optional
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -13,6 +14,9 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 
 logger = logging.getLogger(__name__)
+
+# Thread-safe singleton lock
+_singleton_lock = threading.Lock()
 
 # 默认的高层操作追踪
 _LIGHT_SPANS = {
@@ -64,8 +68,10 @@ class TelemetryManager:
                     BatchSpanProcessor(exporter)
                 )
                 logger.info(f"OTLP 导出器已配置: {otlp_endpoint}")
-            except Exception as e:
+            except (ConnectionError, ValueError, RuntimeError) as e:
                 logger.warning(f"OTLP 导出器配置失败: {e}")
+            except Exception as e:
+                logger.warning(f"OTLP 导出器配置失败 (unexpected error): {e}")
 
         # 设置全局 tracer provider
         trace.set_tracer_provider(self._tracer_provider)
@@ -81,7 +87,8 @@ class TelemetryManager:
             return span_name in _LIGHT_SPANS
         elif self.trace_level == "custom":
             custom_patterns = os.getenv("OTEL_CUSTOM_SPAN_PATTERNS", "").split(",")
-            return any(pattern.strip() in span_name for pattern in custom_patterns if pattern.strip())
+            # Exact match: check if span_name exactly matches any pattern
+            return any(span_name == pattern.strip() for pattern in custom_patterns if pattern.strip())
         return False
 
     def get_tracer(self, name: str) -> trace.Tracer:
@@ -91,9 +98,14 @@ class TelemetryManager:
         return trace.get_tracer(name)
 
     def shutdown(self):
-        """关闭 tracer provider"""
+        """关闭 tracer provider 并清理资源"""
         if self._tracer_provider:
-            self._tracer_provider.force_flush()
+            try:
+                self._tracer_provider.force_flush(timeout_millis=5000)
+                self._tracer_provider.shutdown()
+                logger.info("Telemetry manager 已关闭")
+            except Exception as e:
+                logger.warning(f"关闭 telemetry 时出错: {e}")
 
 
 # 全局单例
@@ -101,10 +113,12 @@ _telemetry_manager: Optional[TelemetryManager] = None
 
 
 def init_telemetry() -> TelemetryManager:
-    """初始化全局 telemetry manager"""
+    """初始化全局 telemetry manager（线程安全）"""
     global _telemetry_manager
     if _telemetry_manager is None:
-        _telemetry_manager = TelemetryManager()
+        with _singleton_lock:
+            if _telemetry_manager is None:
+                _telemetry_manager = TelemetryManager()
     return _telemetry_manager
 
 
