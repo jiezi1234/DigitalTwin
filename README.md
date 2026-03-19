@@ -252,14 +252,19 @@ GET /stats
 DigitalTwin/
 ├── src/                    # 所有代码文件
 │   ├── app.py                  # Flask 主服务，对话接口（路由层）
+|   ├── import_textbook.py      # 教材ppt导入
 │   ├── test_csv_final.py       # CSV 数据导入 & 嵌入生成脚本
 │   ├── preprocess_csv.py       # CSV 预处理（去重、过滤无效消息）
 │   ├── core/                   # 核心业务逻辑
 │   │   ├── rag_service.py          # RAG 向量检索服务（MMR + 时间窗口）
 │   │   ├── self_rag.py             # Self-RAG 反思增强检索（HF / Qwen 双后端）
+│   │   ├── textbook_rag_service.py # 教材RAG向量检索服务 （用于助教分身）
 │   │   └── persona_manager.py      # 分身管理（personas.json CRUD）
+│   ├── models/                  # 模型
+│   │   ├── chat_record_model.py    # 聊天记录原始数据模型
 │   ├── utils/                  # 通用工具函数
 │   │   ├── csv_loader.py           # 微信聊天记录 CSV 加载器
+│   │   ├── doc_loader.py           # 教材ppt 加载器
 │   │   └── tracking.py             # 增量导入跟踪（哈希去重）
 │   └── front/                  # 前端静态文件
 │       ├── index.html              # 主聊天界面

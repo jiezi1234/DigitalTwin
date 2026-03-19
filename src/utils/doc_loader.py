@@ -1,6 +1,7 @@
 """
 PDF/文档加载器
 使用 PyMuPDF 解析 PDF，按章节/段落智能分块
+对图片型页面（扫描件）自动启用 Tesseract OCR
 """
 
 import os
@@ -11,6 +12,12 @@ from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
+
+# 每页图片型判断阈值：页面文字字符数低于此值则视为图片页面，启用 OCR
+OCR_TEXT_THRESHOLD = 50
+
+# OCR 语言配置（Tesseract 语言代码，多语言用 + 连接）
+OCR_LANGUAGE = "chi_sim+eng"
 
 # 需要从每页文本中清除的噪音模式
 NOISE_PATTERNS = [
@@ -29,7 +36,7 @@ class TextChunk:
 
 
 class PDFLoader:
-    """PDF 文档加载器"""
+    """PDF 文档加载器，支持纯文本 PDF 和图片型（扫描件）PDF"""
 
     # 常见章节标题模式（中文教材）
     CHAPTER_PATTERNS = [
@@ -44,10 +51,38 @@ class PDFLoader:
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
         extra_noise_patterns: List[str] = None,
+        ocr_enabled: bool = True,
+        ocr_language: str = OCR_LANGUAGE,
+        ocr_text_threshold: int = OCR_TEXT_THRESHOLD,
+        ocr_dpi: int = 150,
+        ocr_workers: int = 0,
     ):
+        """
+        Args:
+            chunk_size: 每个文本块的最大字符数
+            chunk_overlap: 块间重叠字符数
+            extra_noise_patterns: 额外的噪音正则表达式列表
+            ocr_enabled: 是否启用 OCR（对图片型页面）
+            ocr_language: Tesseract 语言代码，如 "chi_sim+eng"
+            ocr_text_threshold: 页面文字数低于此值时触发 OCR
+            ocr_dpi: OCR 渲染分辨率，越高精度越好但越慢（建议 150-300）
+            ocr_workers: 并行 OCR 线程数，0 表示自动 (min(8, CPU_COUNT))
+        """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        # 允许用户传入额外的噪音正则
+        self.ocr_enabled = ocr_enabled
+        self.ocr_language = ocr_language
+        self.ocr_text_threshold = ocr_text_threshold
+        self.ocr_dpi = ocr_dpi
+        
+        # 默认不建议太多，因为 Tesseract 是 CPU 密集型
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        if ocr_workers <= 0:
+            self.ocr_workers = min(8, cpu_count)
+        else:
+            self.ocr_workers = ocr_workers
+
         self.noise_patterns = list(NOISE_PATTERNS)
         if extra_noise_patterns:
             for p in extra_noise_patterns:
@@ -64,9 +99,47 @@ class PDFLoader:
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
 
+    def _process_page(self, doc_path: str, page_num: int) -> Dict[str, Any]:
+        """
+        处理单页的任务单元（供线程池调用）
+        注意：每个线程都必须重新打开文档，防止 fitz 句柄冲突
+        """
+        try:
+            with fitz.open(doc_path) as doc:
+                page = doc[page_num]
+                
+                # 1. 尝试常规提取
+                raw_text = page.get_text("text")
+                is_image_page = self.ocr_enabled and len(raw_text.strip()) < self.ocr_text_threshold
+
+                if is_image_page:
+                    # 切换 OCR
+                    tp = page.get_textpage_ocr(
+                        language=self.ocr_language,
+                        dpi=self.ocr_dpi,
+                        full=True,
+                    )
+                    text = page.get_text("text", textpage=tp)
+                else:
+                    text = raw_text
+
+                if text.strip():
+                    cleaned = self.clean_page_text(text, self.noise_patterns)
+                    if cleaned:
+                        return {
+                            "text": cleaned,
+                            "page": page_num + 1,
+                            "ocr": is_image_page,
+                            "error": None
+                        }
+            return None
+        except Exception as e:
+            logger.error("第 %d 页 OCR 失败: %s", page_num + 1, e)
+            return {"page": page_num+1, "error": str(e)}
+
     def load_pdf(self, file_path: str) -> List[TextChunk]:
         """
-        加载 PDF 文件并分块
+        加载 PDF 文件并分块，支持多线程 OCR
 
         Args:
             file_path: PDF 文件路径
@@ -77,28 +150,46 @@ class PDFLoader:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"PDF 文件不存在: {file_path}")
 
-        logger.info("正在加载 PDF: %s", file_path)
-        doc = fitz.open(file_path)
+        logger.info("正在加载 PDF: %s（多线程 OCR=%s, 并发线程=%d）",
+                    file_path, self.ocr_enabled, self.ocr_workers)
+        
+        # 为了获取总页数
+        with fitz.open(file_path) as doc:
+            total_pages = len(doc)
+        
+        # 1. 并行处理每页
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        pages_results = [None] * total_pages
+        
+        logger.info("开始多进程解析页面 (共 %d 页)...", total_pages)
+        with ProcessPoolExecutor(max_workers=self.ocr_workers) as executor:
+            futures = {
+                executor.submit(self._process_page, file_path, page_num): page_num 
+                for page_num in range(total_pages)
+            }
+            
+            done = 0
+            ocr_count = 0
+            for future in as_completed(futures):
+                page_idx = futures[future]
+                done += 1
+                result = future.result()
+                if result and not result.get("error"):
+                    pages_results[page_idx] = result
+                    if result.get("ocr"):
+                        ocr_count += 1
+                
+                # 进度打印
+                if done % 20 == 0 or done == total_pages:
+                    logger.info("页面处理进度: %d/%d (已识别 OCR 页: %d)", done, total_pages, ocr_count)
+
+        # 过滤掉 None 结果
+        pages = [p for p in pages_results if p is not None]
         filename = os.path.basename(file_path)
 
-        # 1. 逐页提取文本，记录页码
-        pages = []
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text = page.get_text("text")
-            if text.strip():
-                # 清除每页的噪音信息（标题、版权、页码等）
-                cleaned = self.clean_page_text(text, self.noise_patterns)
-                if cleaned:
-                    pages.append({
-                        "text": cleaned,
-                        "page": page_num + 1,  # 1-indexed
-                    })
+        logger.info("PDF 加载完成。有效页 %d/%d (OCR页: %d)", len(pages), total_pages, ocr_count)
 
-        doc.close()
-        logger.info("PDF 共 %d 页，有效页 %d 页", page_num + 1, len(pages))
-
-        # 2. 检测章节结构
+        # 2. 检测章节结构 (必须保持页码顺序，前面 pages_results[page_idx] 已保证顺序)
         pages_with_chapters = self._detect_chapters(pages)
 
         # 3. 分块
@@ -175,6 +266,7 @@ class PDFLoader:
             page = page_info["page"]
             chapter = page_info["chapter"]
             section = page_info["section"]
+            ocr = page_info.get("ocr", False)
 
             # 按段落先分割
             paragraphs = re.split(r'\n{2,}', text)
@@ -196,7 +288,6 @@ class PDFLoader:
                         break
 
                 if len(current_chunk) + len(para) + 1 > self.chunk_size:
-                    # 当前块已满，保存并开始新块
                     if current_chunk:
                         chunks.append(TextChunk(
                             text=current_chunk,
@@ -206,9 +297,9 @@ class PDFLoader:
                                 "chapter": chapter,
                                 "section": section,
                                 "type": "textbook",
+                                "ocr": ocr,
                             }
                         ))
-                    # 开始新块（带重叠）
                     if len(current_chunk) > self.chunk_overlap:
                         overlap = current_chunk[-self.chunk_overlap:]
                         current_chunk = overlap + "\n" + para
@@ -227,6 +318,7 @@ class PDFLoader:
                         "chapter": chapter,
                         "section": section,
                         "type": "textbook",
+                        "ocr": ocr,
                     }
                 ))
 

@@ -34,16 +34,26 @@ def get_text_hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
-def embed_batch(texts: List[str], model: str) -> List[List[float]]:
-    """调用 DashScope 生成一批文本的嵌入向量"""
-    resp = dashscope.TextEmbedding.call(
-        model=model,
-        input=texts,
-        text_type="document",
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"嵌入 API 错误: {resp.code} - {resp.message}")
-    return [item["embedding"] for item in resp.output["embeddings"]]
+def embed_batch_with_retry(texts: List[str], model: str, max_retries: int = 3) -> List[List[float]]:
+    """调用 DashScope 生成嵌入，含指数退避重试"""
+    for attempt in range(max_retries):
+        try:
+            resp = dashscope.TextEmbedding.call(
+                model=model,
+                input=texts,
+                text_type="document",
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"嵌入 API 错误: {resp.code} - {resp.message}")
+            return [item["embedding"] for item in resp.output["embeddings"]]
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            err_str = str(e)
+            wait = 4 if ("429" in err_str or "rate" in err_str.lower()) else 2
+            logger.warning("嵌入重试 %d/%d: %s，等待 %ds", attempt + 1, max_retries, e, wait)
+            time.sleep(wait)
+    return []  # unreachable
 
 
 def load_tracking(tracking_file: str) -> set:
@@ -60,138 +70,176 @@ def save_tracking(tracking_file: str, hashes: set):
         json.dump(list(hashes), f)
 
 
-def main():
-    # 配置
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        logger.error("请在 .env 中设置 DASHSCOPE_API_KEY")
-        sys.exit(1)
-    dashscope.api_key = api_key
 
-    embed_model = os.getenv("EMBED_MODEL", "text-embedding-v4")
-    persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
-    collection_name = os.getenv("TUTOR_COLLECTION", "textbook_embeddings")
-    textbook_dir = os.getenv("TUTOR_TEXTBOOK_DIR", "./textbook")
-    tracking_file = os.path.join(persist_dir, f"{collection_name}_tracking.json")
-
-    chunk_size = int(os.getenv("TUTOR_CHUNK_SIZE", "1000"))
-    chunk_overlap = int(os.getenv("TUTOR_CHUNK_OVERLAP", "200"))
-
-    # 检查目录
-    if not os.path.isdir(textbook_dir):
-        logger.error("课本目录不存在: %s，请创建并放入 PDF 文件", textbook_dir)
-        sys.exit(1)
-
-    pdf_files = [f for f in os.listdir(textbook_dir) if f.lower().endswith(".pdf")]
-    if not pdf_files:
-        logger.error("课本目录 %s 下没有 PDF 文件", textbook_dir)
-        sys.exit(1)
-
-    logger.info("找到 %d 个 PDF 文件: %s", len(pdf_files), pdf_files)
-
-    # 选择导入模式
-    print("\n请选择导入模式:")
-    print("  1. 全量导入（清空已有数据，重新导入）")
-    print("  2. 增量更新（只导入新增内容）")
-    choice = input("\n请输入 (1/2) [默认 2]: ").strip() or "2"
-
-    # 加载 PDF 并分块
-    from src.utils.doc_loader import PDFLoader
-    loader = PDFLoader(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    all_chunks = loader.load_directory(textbook_dir)
-
-    if not all_chunks:
-        logger.warning("没有提取到任何文本块")
-        sys.exit(0)
-
-    logger.info("共提取 %d 个文本块", len(all_chunks))
-
-    # 初始化 ChromaDB
-    client = chromadb.PersistentClient(path=persist_dir)
-
-    if choice == "1":
-        # 全量导入：删除已有集合
-        try:
-            client.delete_collection(collection_name)
-            logger.info("已删除旧集合: %s", collection_name)
-        except Exception:
-            pass
-        existing_hashes = set()
-    else:
-        existing_hashes = load_tracking(tracking_file)
-        logger.info("已有 %d 条记录", len(existing_hashes))
-
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        metadata={"hnsw:space": "cosine"},
-    )
-
-    # 过滤已导入的块
+def process_chunks(chunks: List[Any], existing_hashes: set, embed_model: str, collection: Any, max_workers: int):
+    """通用处理流程：过滤 -> 嵌入 -> 写入"""
     new_chunks = []
-    for chunk in all_chunks:
+    for chunk in chunks:
         h = get_text_hash(chunk.text)
         if h not in existing_hashes:
             new_chunks.append((chunk, h))
 
     if not new_chunks:
         logger.info("没有新内容需要导入")
-        return
+        return 0, 0, len(chunks)
 
-    logger.info("需要导入 %d 个新文本块（跳过 %d 个已有）",
-                len(new_chunks), len(all_chunks) - len(new_chunks))
-
-    # 分批生成嵌入并写入
     total = len(new_chunks)
+    logger.info("需要导入 %d 个新文本块（跳过 %d 个已有）", total, len(chunks) - total)
+
     imported = 0
     failed = 0
-    all_hashes = set(existing_hashes)
+    
+    # ------- 阶段一：并行生成所有嵌入向量 -------
+    batches = [new_chunks[i:i + EMBED_BATCH_SIZE] for i in range(0, total, EMBED_BATCH_SIZE)]
+    all_results: list = [None] * len(batches)
 
-    for i in range(0, total, EMBED_BATCH_SIZE):
-        batch = new_chunks[i:i + EMBED_BATCH_SIZE]
-        texts = [c.text for c, _ in batch]
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(embed_batch_with_retry, [c.text for c, _ in batch], embed_model): i
+            for i, batch in enumerate(batches)
+        }
+        done = 0
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            done += 1
+            try:
+                vecs = future.result()
+                all_results[idx] = (batches[idx], vecs)
+            except Exception as e:
+                logger.error("批次 %d 嵌入失败: %s", idx, e)
+                failed += len(batches[idx])
+            if done % 10 == 0 or done == len(batches):
+                logger.info("嵌入进度: %d/%d 批次", done, len(batches))
+
+    # ------- 阶段二：顺序 upsert 写入 -------
+    for i, result in enumerate(all_results):
+        if result is None: continue
+        batch, vecs = result
+        ids, docs, metas, embeddings = [], [], [], []
+        for j, ((chunk, h), vec) in enumerate(zip(batch, vecs)):
+            ids.append(f"textbook_{int(time.time())}_{i*EMBED_BATCH_SIZE+j}_{h[:8]}")
+            docs.append(chunk.text)
+            metas.append(chunk.metadata)
+            embeddings.append(vec)
+            existing_hashes.add(h)
 
         try:
-            embeddings = embed_batch(texts, embed_model)
-        except Exception as e:
-            logger.error("批次 %d-%d 嵌入失败: %s", i, i + len(batch), e)
-            failed += len(batch)
-            time.sleep(1)
-            continue
-
-        # 写入 ChromaDB
-        ids = []
-        documents = []
-        metadatas = []
-        for j, (chunk, h) in enumerate(batch):
-            ids.append(f"textbook_{i + j}_{h[:8]}")
-            documents.append(chunk.text)
-            metadatas.append(chunk.metadata)
-            all_hashes.add(h)
-
-        try:
-            collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas,
-            )
+            collection.upsert(ids=ids, embeddings=embeddings, documents=docs, metadatas=metas)
             imported += len(batch)
         except Exception as e:
-            logger.error("写入 ChromaDB 失败: %s", e)
+            logger.error("写入失败（批次 %d）: %s", i, e)
             failed += len(batch)
+            
+    return imported, failed, total
 
-        # 进度
-        progress = (i + len(batch)) / total * 100
-        logger.info("进度: %.1f%% (%d/%d)", progress, i + len(batch), total)
 
-        # 避免 API 限流
-        time.sleep(0.5)
+def main():
+    # 基础配置
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+    if not api_key:
+        logger.error("请在 .env 中设置 DASHSCOPE_API_KEY"); sys.exit(1)
+    dashscope.api_key = api_key
 
-    # 保存跟踪数据
-    save_tracking(tracking_file, all_hashes)
+    embed_model = os.getenv("EMBED_MODEL", "text-embedding-v4")
+    persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+    textbook_dir = os.getenv("TUTOR_TEXTBOOK_DIR", "./textbook")
 
-    logger.info("导入完成！成功 %d，失败 %d，总计 %d", imported, failed, total)
-    logger.info("集合 '%s' 当前共 %d 条记录", collection_name, collection.count())
+    chunk_size = int(os.getenv("TUTOR_CHUNK_SIZE", "1000"))
+    chunk_overlap = int(os.getenv("TUTOR_CHUNK_OVERLAP", "200"))
+
+    if not os.path.isdir(textbook_dir):
+        logger.error("目录不存在: %s", textbook_dir); sys.exit(1)
+
+    client = chromadb.PersistentClient(path=persist_dir)
+
+    # 1. 集合选择
+    print("\n--- 向量数据库集合选择 ---")
+    try:
+        collections = client.list_collections()
+        if collections:
+            print("现有集合：")
+            for i, col in enumerate(collections, 1):
+                print(f"  {i}. {col.name} ({col.count()} 条记录)")
+            print(f"  {len(collections) + 1}. 创建新集合")
+            choice = input(f"请选择 (1-{len(collections) + 1}) [默认 1]: ").strip() or "1"
+            if choice.isdigit() and 1 <= int(choice) <= len(collections):
+                collection_name = collections[int(choice) - 1].name
+            else:
+                collection_name = input("请输入新集合名称: ").strip() or "textbook_embeddings"
+        else:
+            collection_name = input("请输入新集合名称 [默认 textbook_embeddings]: ").strip() or "textbook_embeddings"
+    except Exception:
+        collection_name = "textbook_embeddings"
+
+    # 2. 文件选择
+    from pathlib import Path
+    textbook_path = Path(textbook_dir)
+    pdf_files = sorted(list(textbook_path.glob("*.pdf")))
+    if not pdf_files:
+        logger.error("目录下无 PDF"); sys.exit(1)
+
+    print("\n--- PDF 文件选择 ---")
+    for f in pdf_files: print(f"  {f.name}")
+    while True:
+        pattern = input("\n文件名匹配模式 (如 *.pdf) [默认 *.pdf]: ").strip() or "*.pdf"
+        matched_files = sorted(list(textbook_path.glob(pattern)))
+        if matched_files: break
+        print("未匹配到文件，请重试")
+
+    # 3. 导入模式
+    print("\n--- 导入模式 ---")
+    print("  1. 全量导入 (清空集合重新开始)")
+    print("  2. 增量更新 (只补全缺失 chunk)")
+    is_full = (input("\n选择 (1/2) [默认 2]: ").strip() == "1")
+
+    if is_full:
+        try: client.delete_collection(collection_name)
+        except Exception: pass
+        existing_hashes = set()
+    else:
+        tracking_file = os.path.join(persist_dir, f"{collection_name}_tracking.json")
+        existing_hashes = load_tracking(tracking_file)
+
+    collection = client.get_or_create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
+
+    print("\n请设置并发嵌入线程数：")
+    w = input("线程数 [默认 4]: ").strip() or "4"
+    max_workers = int(w) if w.isdigit() else 4
+
+    # 4. 逐个文件处理 (避免内存爆炸)
+    from src.utils.doc_loader import PDFLoader
+    ocr_workers = int(os.getenv("TUTOR_OCR_WORKERS", "0"))
+    loader = PDFLoader(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+        ocr_enabled=True, ocr_language=os.getenv("TUTOR_OCR_LANGUAGE", "chi_sim+eng"),
+        ocr_dpi=int(os.getenv("TUTOR_OCR_DPI", "150")),
+        ocr_text_threshold=int(os.getenv("TUTOR_OCR_TEXT_THRESHOLD", "50")),
+        ocr_workers=ocr_workers
+    )
+
+    total_imported = 0
+    total_failed = 0
+
+    for i, f_path in enumerate(matched_files):
+        print(f"\n[{i+1}/{len(matched_files)}] 正在处理: {f_path.name}")
+        try:
+            # 加载一个 PDF 的所有 chunk (约几 MB)
+            chunks = loader.load_pdf(str(f_path))
+            # 立即执行 嵌入+写入
+            imp, fail, _ = process_chunks(chunks, existing_hashes, embed_model, collection, max_workers)
+            total_imported += imp
+            total_failed += fail
+            # 每个文件处理完保存一次追踪，防止意外中断
+            tracking_file = os.path.join(persist_dir, f"{collection_name}_tracking.json")
+            save_tracking(tracking_file, existing_hashes)
+        except Exception as e:
+            logger.error("文件 %s 处理失败: %s", f_path.name, e)
+
+    print(f"\n--- 导入总结 ---")
+    print(f"文件数: {len(matched_files)}")
+    print(f"成功导入: {total_imported} chunk")
+    print(f"失败: {total_failed} chunk")
+    print(f"集合 '{collection_name}' 当前总记录: {collection.count()}")
 
 
 if __name__ == "__main__":

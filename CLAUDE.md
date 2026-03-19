@@ -72,7 +72,11 @@ DigitalTwin/
 | 嵌入模型 | DashScope text-embedding-v4（每次 API 请求上限 10 条）|
 | RAG 框架 | LangChain（langchain-chroma、langchain-community） |
 | 前端 | 原生 HTML/CSS/JS（AURA 设计风格，Three.js WebGL 背景，Phosphor Icons） |
+| 文档解析（OCR） | PyMuPDF 内置 OCR（`page.get_textpage_ocr()`）+ Tesseract（`tesseract-ocr-chi-sim`）|
 | 环境管理 | Conda（使用miniforge  环境名：DT） |
+
+> **OCR 依赖**：整本 PDF 导入需系统安装 `sudo apt install tesseract-ocr tesseract-ocr-chi-sim`
+> OCR 行为可通过 `.env` 中的 `TUTOR_OCR_LANGUAGE` / `TUTOR_OCR_DPI` / `TUTOR_OCR_TEXT_THRESHOLD` / `TUTOR_OCR_WORKERS` 调整。
 
 ## 文档索引
 
