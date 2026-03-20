@@ -11,6 +11,9 @@ venv/
 *.log
 logs/
 chroma_db/
+monitoring/prometheus_data/
+monitoring/grafana_data/
+monitoring/loki_data/
 *.egg-info/
 dist/
 build/

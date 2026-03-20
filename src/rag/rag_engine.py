@@ -59,7 +59,6 @@ class RAGEngine:
                 processed_query = query
                 if query_processor:
                     processed_query = query_processor.process(query, persona=kwargs.get("persona"))
-                    logger.info(f"处理后的查询: {processed_query[:100]}")
                     span.set_attribute("rag.query_processed", processed_query[:100])
 
                 # 向量搜索
@@ -71,8 +70,11 @@ class RAGEngine:
                     lambda_mult=lambda_mult,
                 )
 
-                logger.info(f"搜索返回 {len(results)} 条结果")
+                logger.debug(f"[向量检索] 共 {len(results)} 条结果")
                 span.set_attribute("rag.results_count", len(results))
+
+                for i, (content, metadata, score) in enumerate(results, 1):
+                    logger.debug(f"[向量检索] #{i} score={score:.4f} | {content.strip()[:150]}")
 
                 return results
 
@@ -122,14 +124,17 @@ class RAGEngine:
                         record = content.strip()
 
                 elif format_type == "textbook":
-                    # 教材格式
+                    # 教材格式（带编号，供 LLM 引用）
+                    idx = len(lines) + 1
                     if include_metadata:
-                        source = metadata.get("source", "")
+                        source_file = metadata.get("source_file", "")
                         chapter = metadata.get("chapter", "")
                         section = metadata.get("section", "")
                         page = metadata.get("page", "")
 
                         location_parts = []
+                        if source_file:
+                            location_parts.append(source_file)
                         if chapter:
                             location_parts.append(chapter)
                         if section:
@@ -137,10 +142,10 @@ class RAGEngine:
                         if page:
                             location_parts.append(f"第{page}页")
 
-                        location = " > ".join(location_parts) if location_parts else source
-                        record = f"【{location}】\n{content.strip()}\n"
+                        location = " > ".join(location_parts) if location_parts else ""
+                        record = f"[{idx}]【{location}】\n{content.strip()}\n"
                     else:
-                        record = content.strip()
+                        record = f"[{idx}] {content.strip()}"
 
                 else:
                     # 默认格式

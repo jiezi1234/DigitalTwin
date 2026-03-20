@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>数字助教 - 数据库课程</title>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/languages/sql.min.js"></script>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Tutor-specific layout */
+    .tutor-app {
+      position: relative; z-index: 10;
+      display: flex; flex-direction: column;
+      height: 100vh; padding-top: 54px;
+    }
+    .tutor-chat {
+      flex: 1; overflow-y: auto; padding: 24px;
+      max-width: 900px; width: 100%; margin: 0 auto;
+    }
+    .tutor-welcome { text-align: center; padding: 48px 20px; animation: fadeUp 0.4s var(--ease); }
+    .tutor-welcome h2 {
+      font-size: 24px; margin-bottom: 10px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .tutor-welcome p { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+    .tip-grid { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 20px; }
+    .tip-card {
+      background: var(--bg-s2); border: 1px solid var(--border);
+      border-radius: var(--sm-r); padding: 14px 16px; cursor: pointer;
+      font-size: 13px; max-width: 200px; text-align: left;
+      transition: var(--t-el); color: var(--text-1);
+    }
+    .tip-card:hover {
+      background: var(--bg-s3); border-color: rgba(var(--glow),0.25);
+      transform: translateY(-2px); box-shadow: 0 4px 16px rgba(var(--glow),0.08);
+    }
+    .tutor-input {
+      position: relative; z-index: 1;
+      background: var(--bg-s1);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+      border-top: 1px solid var(--border); padding: 14px 24px;
+    }
+    .tutor-input-box {
+      max-width: 900px; margin: 0 auto;
+      display: flex; gap: 10px; align-items: flex-end;
+    }
+    .tutor-input textarea {
+      flex: 1; padding: 12px 16px;
+      border: 1px solid var(--border); border-radius: var(--sm-r);
+      font-size: 14px; font-family: 'Space Grotesk', sans-serif;
+      resize: none; outline: none;
+      min-height: 44px; max-height: 120px;
+      background: var(--bg-s2); color: var(--text-1);
+      transition: var(--t-el);
+    }
+    .tutor-input textarea::placeholder { color: var(--text-2); }
+    .tutor-input textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(var(--glow),0.18); }
+    .status-bar {
+      text-align: center; font-size: 10px; color: var(--text-2); padding: 6px;
+      font-family: 'JetBrains Mono', monospace; letter-spacing: 0.08em;
+      background: var(--bg-s1); border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="tech-label tl-top-left">SYS.CORE // TUTOR-MODE</div>
+  <div class="tech-label tl-bottom-right">TEXTBOOK_RAG_V1.0</div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon" style="background:linear-gradient(135deg,#10B981,#059669);box-shadow:0 2px 12px rgba(16,185,129,0.3)">
+        <i class="ph ph-book-open-text"></i>
+      </span>
+      <div>
+        <span class="brand-name" style="letter-spacing:0.12em">DIGITAL TUTOR</span>
+        <div style="font-size:10px;color:var(--text-2);margin-top:1px">数据库课程智能问答</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button class="tool-btn" onclick="resetChat()"><i class="ph ph-arrow-counter-clockwise"></i><span class="hide-mobile"> 新对话</span></button>
+      <button class="tool-btn" onclick="importTextbook()"><i class="ph ph-download-simple"></i><span class="hide-mobile"> 导入课本</span></button>
+      <button class="tool-btn" onclick="showStats()"><i class="ph ph-chart-bar"></i><span class="hide-mobile"> 统计</span></button>
+      <a href="/" class="tool-btn"><i class="ph ph-arrow-left"></i><span class="hide-mobile"> 数字分身</span></a>
+      <button class="tool-btn theme-btn" id="themeBtn">
+        <i class="ph ph-moon" id="themeIcon"></i>
+        <span id="themeLbl" class="hide-mobile">DARK</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="tutor-app">
+    <div class="tutor-chat" id="chatContainer">
+      <div class="tutor-welcome" id="welcome">
+        <h2>你好，我是数据库课程助教</h2>
+        <p>我可以帮你理解数据库相关知识，回答课本上的问题。<br>试着问我一个问题吧！</p>
+        <div class="tip-grid">
+          <div class="tip-card" onclick="ask('什么是关系数据库？')">什么是关系数据库？</div>
+          <div class="tip-card" onclick="ask('SQL的基本查询语句有哪些？')">SQL的基本查询语句有哪些？</div>
+          <div class="tip-card" onclick="ask('什么是数据库的范式？')">什么是数据库的范式？</div>
+          <div class="tip-card" onclick="ask('事务的ACID特性是什么？')">事务的ACID特性是什么？</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tutor-input">
+      <div class="tutor-input-box">
+        <textarea id="input" rows="1" placeholder="输入你的问题..." onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="btn-send" id="sendBtn" onclick="send()"><i class="ph ph-arrow-right"></i></button>
+      </div>
+    </div>
+    <div class="status-bar" id="statusBar">TEXTBOOK RAG // READY</div>
+  </div>
+
+<script>
+  // ─── Marked config
+  marked.setOptions({
+    highlight: (code, lang) => {
+      try { return lang && hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value; }
+      catch { return code; }
+    }, breaks: true, gfm: true,
+  });
+
+  const chatContainer = $('chatContainer');
+  const input = $('input');
+  const sendBtn = $('sendBtn');
+  const statusBar = $('statusBar');
+  const welcome = $('welcome');
+
+  let sessionId = 'tutor-' + Date.now();
+  let isLoading = false;
+
+  function $(id) { return document.getElementById(id); }
+  function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
+  function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }
+  function ask(q) { input.value = q; send(); }
+  function mdRender(t) { try { return marked.parse(t); } catch { return t; } }
+
+  function addMessage(role, text, isMd) {
+    if (welcome) welcome.style.display = 'none';
+    const div = document.createElement('div');
+    div.className = 'msg ' + role + (role === 'bot' ? ' tutor-msg' : '');
+
+    const av = document.createElement('div');
+    av.className = 'msg-avatar';
+    av.innerHTML = role === 'user' ? '<i class="ph ph-user"></i>' : '<i class="ph ph-book-open-text"></i>';
+    if (role === 'user') av.style.cssText = 'background:var(--bg-s3);color:var(--accent)';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrapper';
+
+    const bub = document.createElement('div');
+    bub.className = 'bubble' + (isMd ? ' md' : '');
+    if (role === 'user') bub.textContent = text;
+    else if (isMd) bub.innerHTML = mdRender(text);
+    else bub.textContent = text;
+
+    wrap.appendChild(bub);
+    div.appendChild(av);
+    div.appendChild(wrap);
+    chatContainer.appendChild(div);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    return { bubble: bub, wrapper: wrap };
+  }
+
+  function addSources(wrapper, sources) {
+    if (!sources || !sources.length) return;
+    const sd = document.createElement('div');
+    sd.className = 'sources';
+    sd.innerHTML = '<div class="sources-title">REFERENCES</div>';
+    sources.forEach(s => {
+      const si = document.createElement('div');
+      si.className = 'source-item';
+      si.textContent = [s.source_file, s.chapter, s.page ? 'P' + s.page : ''].filter(Boolean).join(' // ') || '未知来源';
+      sd.appendChild(si);
+    });
+    wrapper.appendChild(sd);
+  }
+
+  async function send() {
+    const text = input.value.trim();
+    if (!text || isLoading) return;
+    isLoading = true; sendBtn.disabled = true;
+    input.value = ''; input.style.height = 'auto';
+
+    addMessage('user', text, false);
+    statusBar.textContent = 'PROCESSING // THINKING...';
+
+    const { bubble, wrapper } = addMessage('bot', '', true);
+    bubble.classList.add('cursor-blink');
+
+    let fullText = '', sources = null;
+    try {
+      const resp = await fetch('/tutor/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, session_id: sessionId, stream: true }),
+      });
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const d = JSON.parse(line.slice(6).trim());
+            if (d.type === 'token') { fullText += d.content; bubble.innerHTML = mdRender(fullText); chatContainer.scrollTop = chatContainer.scrollHeight; }
+            else if (d.type === 'sources') sources = d.sources;
+            else if (d.error) { fullText += '\n\n⚠️ ' + d.error; bubble.innerHTML = mdRender(fullText); }
+          } catch {}
+        }
+      }
+      bubble.classList.remove('cursor-blink');
+      bubble.innerHTML = mdRender(fullText);
+      bubble.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch {} });
+      if (sources) addSources(wrapper, sources);
+      statusBar.textContent = sources && sources.length
+        ? `REFERENCES // ${sources.length} SOURCES`
+        : 'TEXTBOOK RAG // READY';
+    } catch (e) {
+      bubble.classList.remove('cursor-blink');
+      bubble.innerHTML = mdRender('网络错误: `' + e.message + '`');
+      statusBar.textContent = 'CONNECTION // FAILED';
+    }
+    isLoading = false; sendBtn.disabled = false; input.focus();
+  }
+
+  async function resetChat() {
+    await fetch('/tutor/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: sessionId }) });
+    sessionId = 'tutor-' + Date.now();
+    chatContainer.innerHTML = '';
+    if (welcome) { welcome.style.display = ''; chatContainer.appendChild(welcome); }
+    statusBar.textContent = 'SESSION // RESET';
+  }
+
+  async function importTextbook() {
+    if (!confirm('确定要导入/更新课本数据？请先将 PDF 放入 textbook/ 目录。')) return;
+    statusBar.textContent = 'IMPORTING // IN PROGRESS...';
+    try {
+      const r = await fetch('/tutor/import', { method: 'POST' });
+      const d = await r.json();
+      alert(d.message || '导入已启动');
+      statusBar.textContent = 'IMPORTING // BACKGROUND';
+    } catch { alert('导入请求失败'); }
+  }
+
+  async function showStats() {
+    try {
+      const r = await fetch('/tutor/stats');
+      const d = await r.json();
+      if (d.status === 'success') {
+        const s = d.data;
+        alert(`课本数据库统计\n\n状态: ${s.connected ? '已连接' : '未连接'}\n记录数: ${s.total_records || 0}\n集合: ${s.collection || '-'}`);
+      } else alert('获取失败');
+    } catch { alert('请求失败'); }
+  }
+
+  // ─── Theme
+  function loadTheme() {
+    const t = localStorage.getItem('dt_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    $('themeIcon').className = t === 'dark' ? 'ph ph-moon' : 'ph ph-sun';
+    $('themeLbl').textContent = t === 'dark' ? 'DARK' : 'LIGHT';
+  }
+  $('themeBtn').addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('dt_theme', next);
+    $('themeIcon').className = next === 'dark' ? 'ph ph-moon' : 'ph ph-sun';
+    $('themeLbl').textContent = next === 'dark' ? 'DARK' : 'LIGHT';
+  });
+
+  loadTheme();
+  input.focus();
+</script>
+
+<style>
+  @media (max-width: 768px) {
+    .hide-mobile { display: none; }
+    .tutor-chat { padding: 16px; }
+    .tutor-input { padding: 10px 14px; }
+    .tip-grid { gap: 6px; }
+    .tip-card { padding: 10px 12px; font-size: 12px; max-width: 180px; }
+  }
+</style>
+</body>
+</html>

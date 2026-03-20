@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "digitaltwin-app"
+    static_configs:
+      - targets: ["host.docker.internal:9464"]
+    # 允许 prometheus 容器访问宿主机上的端口
+    # 在 Linux 上可能需要特殊的 extra_hosts 配置，或者使用宿主机 IP

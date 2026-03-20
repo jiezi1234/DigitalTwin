@@ -78,7 +78,7 @@ class QueryProcessor:
                 )
 
                 if result and result != query:
-                    logger.info(f"指代消解: '{query}' → '{result}'")
+                    logger.debug(f"[指代消解] {query} → {result}")
                     span.set_attribute("query.coreference_changed", True)
                     return result
 
@@ -137,7 +137,7 @@ class QueryProcessor:
                 )
 
                 if result and result != query:
-                    logger.info(f"Query改写: '{query}' → '{result}'")
+                    logger.debug(f"[查询重写] {query} → {result}")
                     span.set_attribute("query.rewritten", True)
                     return result
 
@@ -166,12 +166,10 @@ class QueryProcessor:
             # 步骤 1：指代消解
             if self.enable_coreference_resolution:
                 query = self.resolve_coreference(query, persona)
-                logger.debug(f"指代消解后: {query[:100]}")
 
             # 步骤 2：Query Rewriting
             if self.enable_query_rewriting:
                 query = self.rewrite_query(query, persona)
-                logger.debug(f"改写后: {query[:100]}")
 
             span.set_attribute("query.processed", query[:100])
             return query

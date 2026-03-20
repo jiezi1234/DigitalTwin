@@ -1,9 +1,10 @@
-"""
-PDF 文件加载器（用于教材）
-"""
-
+import os
+import re
+import fitz  # PyMuPDF
 import logging
-from typing import List, Optional
+import concurrent.futures
+import multiprocessing
+from typing import List, Dict, Any, Optional
 from src.loaders.base import DataLoader
 from src.infrastructure.document import Document
 from src.infrastructure.telemetry import get_tracer
@@ -11,68 +12,234 @@ from src.infrastructure.telemetry import get_tracer
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
 
+# 默认噪音模式 (同步自旧项目)
+DEFAULT_NOISE_PATTERNS = [
+    re.compile(r'^Principle and Technology of Database\s*$', re.MULTILINE),
+    re.compile(r'^NOTES\s*$', re.MULTILINE),
+    re.compile(r'^Copyright\s*©.*$', re.MULTILINE),
+    re.compile(r'^Page\s+\d+\s*$', re.MULTILINE),
+]
+
+# 章节标题提取正则
+CHAPTER_PATTERNS = [
+    re.compile(r'^第[一二三四五六七八九十\d]+章\s+'),
+    re.compile(r'^第[一二三四五六七八九十\d]+节\s+'),
+    re.compile(r'^\d+\.\d+(\.\d+)?\s+'),  # 1.1 / 1.1.1 格式
+    re.compile(r'^Chapter\s+\d+', re.IGNORECASE),
+]
+
 
 class PDFLoader(DataLoader):
-    """PDF 加载器，支持教材和文档"""
+    """高级 PDF 加载器，支持纯文本和扫描件 OCR (多进程并行加速)"""
 
     def __init__(
         self,
         filepath: str,
-        extract_metadata: bool = True,
+        ocr_enabled: bool = True,
+        ocr_language: str = "chi_sim+eng",
+        ocr_text_threshold: int = 50,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+        max_workers: Optional[int] = None,
+        **kwargs
     ):
         """
         初始化 PDF 加载器
 
         Args:
             filepath: PDF 文件路径
-            extract_metadata: 是否提取页码等元数据
+            ocr_enabled: 是否对图片页启用 OCR
+            ocr_language: Tesseract 语言配置 (如 "chi_sim+eng")
+            ocr_text_threshold: 页面文字字符数低于此值则视为图片页面，启用 OCR
+            chunk_size: 分块大小 (字符数)
+            chunk_overlap: 块间重叠度
+            max_workers: 并行进程数 (缺省为 min(8, cpu_count))
         """
         self.filepath = filepath
-        self.extract_metadata = extract_metadata
+        self.ocr_enabled = ocr_enabled
+        self.ocr_language = ocr_language
+        self.ocr_text_threshold = ocr_text_threshold
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        
+        if max_workers is None:
+            self.max_workers = min(8, multiprocessing.cpu_count())
+        else:
+            self.max_workers = max_workers
+
+    def _clean_text(self, text: str) -> str:
+        """清理页面文本噪音"""
+        for pattern in DEFAULT_NOISE_PATTERNS:
+            text = pattern.sub('', text)
+        # 清理多余空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
     def load(self) -> List[Document]:
-        """加载 PDF 文件"""
-        with tracer.start_as_current_span("loader.load") as span:
-            span.set_attribute("loader.type", "pdf")
+        """执行 PDF 加载、通过基类并行执行 OCR 及分块"""
+        with tracer.start_as_current_span("pdf_loader.load") as span:
             span.set_attribute("loader.filepath", self.filepath)
 
+            if not os.path.exists(self.filepath):
+                raise FileNotFoundError(f"PDF 文件不存在: {self.filepath}")
+
+            filename = os.path.basename(self.filepath)
+            
+            # 1. 获取总页数
+            with fitz.open(self.filepath) as doc:
+                total_pages = len(doc)
+            
+            # 2. 准备并行任务参数
+            tasks = [
+                {
+                    "filepath": self.filepath,
+                    "page_num": i,
+                    "ocr_enabled": self.ocr_enabled,
+                    "ocr_language": self.ocr_language,
+                    "ocr_text_threshold": self.ocr_text_threshold
+                }
+                for i in range(total_pages)
+            ]
+            
+            # 3. 调用基类通用并行方法
+            logger.info(f"调用基类并行组件解析 PDF (共 {total_pages} 页, 并发: {self.max_workers})...")
+            pages_data = self._run_parallel(
+                PDFLoader._process_single_page_static, 
+                tasks, 
+                max_workers=self.max_workers
+            )
+
+            # 4. 顺序处理结果，进行章节检测和分块
             documents = []
+            current_chapter = "前言"
+            current_section = ""
 
-            try:
-                # 懒加载 PyPDF2 以避免硬依赖
-                from PyPDF2 import PdfReader
+            for p_data in pages_data:
+                if not p_data or p_data.get("error") or not p_data.get("text"):
+                    if p_data and p_data.get("error"):
+                        logger.error(f"处理第 {p_data['page_num']+1} 页失败: {p_data['error']}")
+                    continue
 
-                reader = PdfReader(self.filepath)
+                text = p_data["text"]
+                page_idx = p_data["page_num"]
+                is_ocr = p_data["is_ocr"]
 
-                for page_num, page in enumerate(reader.pages):
-                    text = page.extract_text()
+                # 章节检测 (必须按顺序进行)
+                current_chapter, current_section = self._detect_headings(text, current_chapter, current_section)
 
-                    if not text.strip():
-                        continue
-
+                # 分块
+                page_chunks = self._split_text(text)
+                for i, chunk_text in enumerate(page_chunks):
                     metadata = {
                         "source": "pdf",
-                        "source_file": self.filepath,
-                        "page": page_num + 1,
+                        "source_file": filename,
+                        "page": page_idx + 1,
+                        "ocr": is_ocr,
+                        "chapter": current_chapter,
+                        "section": current_section,
+                        "chunk_index": i,
+                        "content_type": "textbook"
                     }
+                    documents.append(Document(
+                        content=chunk_text,
+                        metadata=metadata
+                    ))
 
-                    doc = Document(
-                        content=text,
-                        metadata=metadata,
-                    )
-                    documents.append(doc)
-
-                logger.info(f"从 {self.filepath} 加载了 {len(documents)} 页")
-                span.set_attribute("loader.documents_loaded", len(documents))
-
-            except ImportError:
-                logger.error("PyPDF2 未安装，请运行: pip install PyPDF2")
-                span.record_exception(ImportError("PyPDF2 not installed"))
-                raise
-
-            except Exception as e:
-                logger.error(f"加载 PDF 文件失败: {self.filepath} - {e}")
-                span.record_exception(e)
-                raise
-
+            logger.info(f"PDF 加载完成: {filename}, 共生成 {len(documents)} 个 Doc 块")
+            span.set_attribute("loader.docs_count", len(documents))
             return documents
+
+    @staticmethod
+    def _process_single_page_static(params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        静态单页处理逻辑，避免实例序列化问题
+        """
+        filepath = params["filepath"]
+        page_num = params["page_num"]
+        ocr_enabled = params["ocr_enabled"]
+        ocr_language = params["ocr_language"]
+        ocr_text_threshold = params["ocr_text_threshold"]
+
+        try:
+            with fitz.open(filepath) as doc:
+                page = doc[page_num]
+                raw_text = page.get_text("text")
+                is_ocr = False
+
+                if ocr_enabled and len(raw_text.strip()) < ocr_text_threshold:
+                    try:
+                        tp = page.get_textpage_ocr(
+                            language=ocr_language,
+                            dpi=150,
+                            full=True
+                        )
+                        raw_text = page.get_text("text", textpage=tp)
+                        is_ocr = True
+                    except Exception as ocr_err:
+                        logger.warning(f"页面 {page_num+1} OCR 失败: {ocr_err}")
+
+                # 注意：_clean_text 现在逻辑也在静态方法里或需重复定义
+                # 为简单起见，这里直接复用逻辑
+                text = raw_text
+                # 默认噪音模式 (同步自旧项目)
+                noise_patterns = [
+                    re.compile(r'^Principle and Technology of Database\s*$', re.MULTILINE),
+                    re.compile(r'^NOTES\s*$', re.MULTILINE),
+                    re.compile(r'^Copyright\s*©.*$', re.MULTILINE),
+                    re.compile(r'^Page\s+\d+\s*$', re.MULTILINE),
+                ]
+                for pattern in noise_patterns:
+                    text = pattern.sub('', text)
+                text = re.sub(r'\n{3,}', '\n\n', text)
+                cleaned_text = text.strip()
+
+                return {
+                    "page_num": page_num,
+                    "text": cleaned_text,
+                    "is_ocr": is_ocr,
+                    "error": None
+                }
+        except Exception as e:
+            return {
+                "page_num": page_num,
+                "text": "",
+                "is_ocr": False,
+                "error": str(e)
+            }
+
+    def _detect_headings(self, text: str, current_chapter: str, current_section: str):
+        """尝试从文本更新当前章节/小节信息"""
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            for pattern in CHAPTER_PATTERNS:
+                if pattern.match(line):
+                    if '章' in line or line.lower().startswith('chapter'):
+                        current_chapter = line
+                        current_section = ""
+                    else:
+                        current_section = line
+                    break # 找到一个匹配后跳出内层模式循环
+        return current_chapter, current_section
+
+    def _split_text(self, text: str) -> List[str]:
+        """将页面文本根据 chunk_size 和 overlap 进行分块"""
+        if len(text) <= self.chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + self.chunk_size
+            chunk = text[start:end]
+            chunks.append(chunk)
+            
+            if end >= len(text):
+                break
+                
+            start = end - self.chunk_overlap
+            if start >= end:
+                start = end
+        
+        return chunks

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Digital Twin</title>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/languages/sql.min.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- WebGL Shader Background -->
+  <div id="webglBg"></div>
+
+  <!-- Tech Labels -->
+  <div class="tech-label tl-top-left">SYS.CORE // ON-LINE</div>
+  <div class="tech-label tl-bottom-right">DIGITAL_TWIN_V1.0</div>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon"><i class="ph ph-brain"></i></span>
+      <span class="brand-name">DIGITAL TWIN</span>
+    </div>
+    <div class="toolbar">
+      <button class="tool-btn" id="exportBtn" title="导出对话"><i class="ph ph-export"></i></button>
+      <span class="ver-tag">V1.0</span>
+      <button class="tool-btn theme-btn" id="themeBtn">
+        <i class="ph ph-moon" id="themeIcon"></i>
+        <span id="themeLbl">DARK</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- App Layout -->
+  <div class="app-layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sb-head"><div class="badge mono">SESSIONS</div></div>
+      <div class="sb-list" id="sbList"></div>
+      <div class="sb-foot">
+        <button class="btn-accent" id="btnNewPersona">
+          <i class="ph ph-plus-circle"></i> 选择分身
+        </button>
+        <button class="btn-outline" id="btnNewTutor">
+          <i class="ph ph-book-open-text"></i> 数字助教
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+
+      <!-- Welcome View -->
+      <div class="view-welcome" id="viewWelcome">
+        <div class="welcome-card">
+          <div class="badge mono">DIGITAL.TWIN</div>
+          <h1>数字分身</h1>
+          <p class="sub-text">选择一个分身，开始对话</p>
+          <div class="wc-grid" id="wcGrid"></div>
+          <div class="wc-input-row">
+            <input type="text" id="wcInput" class="pill-input" placeholder="或直接输入消息...">
+            <button class="btn-send" id="wcSend"><i class="ph ph-arrow-right"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat View -->
+      <div class="view-chat hidden" id="viewChat">
+        <div class="chat-bar">
+          <button class="tool-btn mobile-only" id="menuBtn"><i class="ph ph-list"></i></button>
+          <div class="chat-title">
+            <span class="chat-name" id="chatName">对话</span>
+            <span class="badge mono sm" id="chatBadge"></span>
+          </div>
+          <div class="chat-bar-actions">
+            <button class="tool-btn" id="clearBtn" title="清除历史"><i class="ph ph-trash"></i></button>
+          </div>
+        </div>
+        <div class="chat-scroll" id="chatScroll">
+          <div class="chat-messages" id="chatMessages"></div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input-box">
+            <button class="icon-btn" id="micBtn" title="语音输入"><i class="ph ph-microphone"></i></button>
+            <textarea id="chatInput" class="pill-input" placeholder="输入消息..." rows="1"></textarea>
+            <label class="icon-btn" title="上传文件">
+              <i class="ph ph-paperclip"></i>
+              <input type="file" id="fileInput" hidden>
+            </label>
+            <button class="btn-send" id="chatSendBtn"><i class="ph ph-arrow-right"></i></button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Mobile Sidebar Overlay -->
+  <div class="sb-overlay" id="sbOverlay"></div>
+
+  <!-- Persona Selection Modal -->
+  <div class="modal hidden" id="personaModal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-panel">
+      <div class="badge mono">SELECT.PERSONA</div>
+      <h2>选择分身</h2>
+      <p class="sub-text">选择一个数字分身开始对话</p>
+      <div class="persona-list" id="personaList"></div>
+      <button class="btn-ghost" id="modalCloseBtn">取消</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
