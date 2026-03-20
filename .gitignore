@@ -1,23 +1,44 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-.venv
-.env
-.env.local
-*.log
-logs/
-chroma_db/
-monitoring/prometheus_data/
-monitoring/grafana_data/
-monitoring/loki_data/
 *.egg-info/
 dist/
 build/
+
+# 虚拟环境
+env/
+venv/
+.venv
+
+# 环境变量
+.env
+.env.local
+
+# 日志
+*.log
+logs/
+
+# 数据文件（CSV / PDF）
+data/
+
+# ChromaDB 持久化
+chroma_db/
+
+# 监控持久化数据
+monitoring/prometheus_data/
+monitoring/grafana_data/
+monitoring/loki_data/
+
+# 测试 & 质量
 .pytest_cache/
 .coverage
 htmlcov/
 .mypy_cache/
+
+# IDE & 工具
+.idea/
+.vscode/
+.claude/
