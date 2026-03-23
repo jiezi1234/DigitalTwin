@@ -140,7 +140,80 @@
   function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
   function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }
   function ask(q) { input.value = q; send(); }
-  function mdRender(t) { try { return marked.parse(t); } catch { return t; } }
+  
+  // ─── Reference Tooltip Logic ─────────────────────────
+  let refTooltipTimer;
+  const tooltipEl = document.createElement('div');
+  tooltipEl.className = 'ref-tooltip';
+  document.body.appendChild(tooltipEl);
+  
+  function formatSource(s) {
+    let cChap = (s.chapter || '').split(/[\n•]/)[0].trim();
+    if(cChap.length > 60) cChap = cChap.substring(0, 60) + '...';
+    return [s.source_file, cChap, s.page ? 'P' + s.page : ''].filter(Boolean).join(' // ') || '未知来源';
+  }
+
+  window.showRefTooltip = function(e, el, refIdx) {
+    clearTimeout(refTooltipTimer);
+    const wrapper = el.closest('.msg-wrapper') || el;
+    const sourcesDiv = wrapper.querySelector('.sources') || (el.classList.contains('sources') ? el : null);
+    if (!sourcesDiv || !sourcesDiv.dataset.sources) return;
+  
+    const sources = JSON.parse(decodeURIComponent(sourcesDiv.dataset.sources));
+    if (!sources.length) return;
+  
+    let content = '<div class="ref-tooltip-header">参考文献 REFERENCES</div>';
+    const showAll = (refIdx === 'all');
+    
+    if (!showAll) {
+      const idx = parseInt(refIdx) - 1;
+      if (idx >= 0 && idx < sources.length) {
+        const text = formatSource(sources[idx]);
+        content += `<div class="ref-tooltip-item" style="color: var(--accent); font-weight: 600;">${text}</div>`;
+      } else {
+        content += `<div class="ref-tooltip-item">未匹配到对应的文献记录</div>`;
+      }
+    } else {
+      const maxItems = Math.min(sources.length, 8);
+      for (let i = 0; i < maxItems; i++) {
+          const text = formatSource(sources[i]);
+          content += `<div class="ref-tooltip-item">${text}</div>`;
+      }
+    }
+    
+    tooltipEl.innerHTML = content;
+    const rect = el.getBoundingClientRect();
+    let top = rect.top - tooltipEl.offsetHeight - 8;
+    let left = rect.left - (tooltipEl.offsetWidth / 2) + (rect.width / 2);
+    
+    if (top < 10) top = rect.bottom + 8;
+    if (left < 10) left = 10;
+    if (left + 280 > window.innerWidth) left = window.innerWidth - 290;
+    
+    tooltipEl.style.top = top + 'px';
+    tooltipEl.style.left = left + 'px';
+    tooltipEl.classList.add('show');
+  };
+  
+  window.hideRefTooltip = function() {
+    refTooltipTimer = setTimeout(() => {
+      tooltipEl.classList.remove('show');
+    }, 100);
+  };
+  
+  function mdRender(t, sourcesLen = 0) { 
+    try { 
+      let html = marked.parse(t);
+      html = html.replace(/\[(\d+)\]/g, (match, p1) => {
+         const idx = parseInt(p1);
+         if (idx > 0 && idx <= sourcesLen) {
+            return `<span class="ref-link" data-ref="${idx}" onmouseenter="showRefTooltip(event, this, ${idx})" onmouseleave="hideRefTooltip()">[${idx}]</span>`;
+         }
+         return '';
+      });
+      return html;
+    } catch { return t; } 
+  }
 
   function addMessage(role, text, isMd) {
     if (welcome) welcome.style.display = 'none';
@@ -173,13 +246,23 @@
     if (!sources || !sources.length) return;
     const sd = document.createElement('div');
     sd.className = 'sources';
+    sd.dataset.sources = encodeURIComponent(JSON.stringify(sources));
+    sd.setAttribute('onmouseenter', 'showRefTooltip(event, this, "all")');
+    sd.setAttribute('onmouseleave', 'hideRefTooltip()');
     sd.innerHTML = '<div class="sources-title">REFERENCES</div>';
-    sources.forEach(s => {
+    sources.slice(0, 3).forEach(s => {
       const si = document.createElement('div');
       si.className = 'source-item';
-      si.textContent = [s.source_file, s.chapter, s.page ? 'P' + s.page : ''].filter(Boolean).join(' // ') || '未知来源';
+      si.textContent = formatSource(s);
       sd.appendChild(si);
     });
+    if (sources.length > 3) {
+      const more = document.createElement('div');
+      more.className = 'source-item';
+      more.style.fontStyle = 'italic';
+      more.textContent = `... 等共 ${sources.length} 篇文献 (悬停查看前8个)`;
+      sd.appendChild(more);
+    }
     wrapper.appendChild(sd);
   }
 
@@ -213,14 +296,14 @@
           if (!line.startsWith('data: ')) continue;
           try {
             const d = JSON.parse(line.slice(6).trim());
-            if (d.type === 'token') { fullText += d.content; bubble.innerHTML = mdRender(fullText); chatContainer.scrollTop = chatContainer.scrollHeight; }
+            if (d.type === 'token') { fullText += d.content; bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0); chatContainer.scrollTop = chatContainer.scrollHeight; }
             else if (d.type === 'sources') sources = d.sources;
-            else if (d.error) { fullText += '\n\n⚠️ ' + d.error; bubble.innerHTML = mdRender(fullText); }
+            else if (d.error) { fullText += '\n\n⚠️ ' + d.error; bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0); }
           } catch {}
         }
       }
       bubble.classList.remove('cursor-blink');
-      bubble.innerHTML = mdRender(fullText);
+      bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0);
       bubble.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch {} });
       if (sources) addSources(wrapper, sources);
       statusBar.textContent = sources && sources.length

@@ -88,6 +88,18 @@ class PDFLoader(DataLoader):
             # 1. 获取总页数
             with fitz.open(self.filepath) as doc:
                 total_pages = len(doc)
+                
+                # 提前测试 Tesseract 依赖，避免多进程重复报错刷屏
+                if self.ocr_enabled and total_pages > 0:
+                    try:
+                        # 用第一页轻轻地初始化一下 OCR
+                        doc[0].get_textpage_ocr(language=self.ocr_language, dpi=72, full=False)
+                    except Exception as e:
+                        if "Tesseract is not installed" in str(e) or "tessdata" in str(e):
+                            logger.warning(f"由于未安装 Tesseract OCR 或未配置 tessdata，已自动回退为纯文字提取模式，跳过所有 OCR 处理。({e})")
+                            self.ocr_enabled = False
+                        else:
+                            logger.warning(f"OCR 初始化异常: {e}")
             
             # 2. 准备并行任务参数
             tasks = [

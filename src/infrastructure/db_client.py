@@ -184,7 +184,8 @@ class DBClient:
                 return results
 
             except Exception as e:
-                logger.error(f"搜索失败: {e}")
+                import traceback
+                logger.error(f"搜索失败: {e}\n{traceback.format_exc()}")
                 span.record_exception(e)
                 raise
             finally:
