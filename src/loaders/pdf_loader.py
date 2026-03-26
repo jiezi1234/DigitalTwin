@@ -1,7 +1,10 @@
 import os
 import re
+import json
+import hashlib
 import fitz  # PyMuPDF
 import logging
+from datetime import datetime, timezone
 import concurrent.futures
 import multiprocessing
 from typing import List, Dict, Any, Optional
@@ -74,6 +77,137 @@ class PDFLoader(DataLoader):
         # 清理多余空行
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
+
+    @staticmethod
+    def _normalize_bbox(bbox: Any) -> Dict[str, float]:
+        """将 PyMuPDF 的 bbox 统一为 JSON 友好的坐标格式"""
+        x0, y0, x1, y1 = bbox
+        return {
+            "x0": round(float(x0), 3),
+            "y0": round(float(y0), 3),
+            "x1": round(float(x1), 3),
+            "y1": round(float(y1), 3),
+        }
+
+    def export_structured(
+        self,
+        output_dir: str,
+        json_filename: str = "structured_content.json",
+        image_dirname: str = "images",
+    ) -> Dict[str, Any]:
+        """
+        导出 PDF 的文本块、图片及统一 JSON 清单。
+
+        Args:
+            output_dir: 导出目录
+            json_filename: 统一 JSON 文件名
+            image_dirname: 图片输出子目录名
+
+        Returns:
+            结构化导出结果字典
+        """
+        if not os.path.exists(self.filepath):
+            raise FileNotFoundError(f"PDF 文件不存在: {self.filepath}")
+
+        os.makedirs(output_dir, exist_ok=True)
+        images_dir = os.path.join(output_dir, image_dirname)
+        os.makedirs(images_dir, exist_ok=True)
+
+        filename = os.path.basename(self.filepath)
+        export_data: Dict[str, Any] = {
+            "source": "pdf",
+            "source_file": filename,
+            "source_path": os.path.abspath(self.filepath),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "pages": [],
+            "summary": {
+                "page_count": 0,
+                "text_block_count": 0,
+                "image_count": 0,
+            },
+        }
+
+        with fitz.open(self.filepath) as doc:
+            export_data["summary"]["page_count"] = len(doc)
+            written_images: Dict[str, str] = {}
+
+            for page_index, page in enumerate(doc):
+                page_dict = page.get_text("dict")
+                page_entry = {
+                    "page": page_index + 1,
+                    "width": round(float(page.rect.width), 3),
+                    "height": round(float(page.rect.height), 3),
+                    "text_blocks": [],
+                    "images": [],
+                }
+
+                image_index = 0
+                for block in page_dict.get("blocks", []):
+                    block_type = block.get("type")
+
+                    if block_type == 0:
+                        spans = []
+                        for line in block.get("lines", []):
+                            for span in line.get("spans", []):
+                                spans.append(span.get("text", ""))
+
+                        raw_text = "".join(spans)
+                        cleaned_text = self._clean_text(raw_text)
+                        if not cleaned_text:
+                            continue
+
+                        page_entry["text_blocks"].append({
+                            "block_index": len(page_entry["text_blocks"]),
+                            "bbox": self._normalize_bbox(block["bbox"]),
+                            "content": cleaned_text,
+                        })
+                        export_data["summary"]["text_block_count"] += 1
+
+                    elif block_type == 1:
+                        image_bytes = block.get("image")
+                        image_ext = (block.get("ext") or "bin").lower()
+                        image_index += 1
+                        image_hash = hashlib.sha256(image_bytes or b"").hexdigest()
+                        canonical_relative_path = written_images.get(image_hash)
+
+                        if canonical_relative_path is None:
+                            image_filename = (
+                                f"page_{page_index + 1:04d}_img_{image_index:03d}.{image_ext}"
+                            )
+                            canonical_relative_path = os.path.join(image_dirname, image_filename)
+                            image_path = os.path.join(output_dir, canonical_relative_path)
+
+                            if image_bytes:
+                                with open(image_path, "wb") as image_file:
+                                    image_file.write(image_bytes)
+                            written_images[image_hash] = canonical_relative_path
+
+                        page_entry["images"].append({
+                            "image_index": image_index - 1,
+                            "bbox": self._normalize_bbox(block["bbox"]),
+                            "width": block.get("width"),
+                            "height": block.get("height"),
+                            "colorspace": block.get("colorspace"),
+                            "bpc": block.get("bpc"),
+                            "xres": block.get("xres"),
+                            "yres": block.get("yres"),
+                            "extension": image_ext,
+                            "file": canonical_relative_path.replace(os.sep, "/"),
+                            "image_hash": image_hash,
+                            "size_bytes": len(image_bytes or b""),
+                            "is_duplicate": image_hash in written_images and written_images[image_hash] != canonical_relative_path,
+                        })
+                        export_data["summary"]["image_count"] += 1
+
+                export_data["pages"].append(page_entry)
+
+        json_path = os.path.join(output_dir, json_filename)
+        with open(json_path, "w", encoding="utf-8") as json_file:
+            json.dump(export_data, json_file, ensure_ascii=False, indent=2)
+
+        export_data["json_file"] = os.path.abspath(json_path)
+        export_data["images_dir"] = os.path.abspath(images_dir)
+        return export_data
 
     def load(self) -> List[Document]:
         """执行 PDF 加载、通过基类并行执行 OCR 及分块"""

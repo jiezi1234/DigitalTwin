@@ -25,7 +25,7 @@ logs/
 data/
 
 # ChromaDB 持久化
-chroma_db/
+chroma_db*/
 
 # 监控持久化数据
 monitoring/prometheus_data/
@@ -37,6 +37,10 @@ monitoring/loki_data/
 .coverage
 htmlcov/
 .mypy_cache/
+
+# PDF 导出图片
+output/
+
 
 # IDE & 工具
 .idea/

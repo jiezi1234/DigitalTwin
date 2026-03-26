@@ -90,3 +90,25 @@ def test_db_client_get_stats(mock_env):
             stats = client.get_stats(collection_name="test")
 
             assert "total_records" in stats
+
+
+def test_db_client_search_by_embedding(mock_env):
+    """按向量搜索"""
+    with patch("chromadb.PersistentClient"):
+        with patch("src.infrastructure.db_client.DashScopeEmbeddings"):
+            client = DBClient(persist_dir="./chroma_db_test")
+
+            mock_collection = MagicMock()
+            mock_collection.query.return_value = {
+                "documents": [["result 1"]],
+                "metadatas": [[{"source": "pdf"}]],
+                "distances": [[0.25]],
+            }
+
+            client._chroma_client = MagicMock()
+            client._chroma_client.get_or_create_collection.return_value = mock_collection
+
+            results = client.search_by_embedding([0.1, 0.2], collection_name="test", k=3)
+
+            assert len(results) == 1
+            assert results[0][0] == "result 1"

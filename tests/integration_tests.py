@@ -79,17 +79,26 @@ def test_end_to_end_chat_rag_flow(mock_llm_client, mock_db_client, sample_csv_fi
 
 def test_end_to_end_textbook_rag_flow(mock_llm_client, mock_db_client):
     """测试完整的教材 RAG 流程"""
+    mock_mm_client = MagicMock()
+    mock_mm_client.embed_query.return_value = [0.1, 0.2, 0.3]
+
     # 初始化教材 RAG 服务
     textbook_service = TextbookRAGService(
         llm_client=mock_llm_client,
         db_client=mock_db_client,
+        mm_client=mock_mm_client,
     )
     assert textbook_service is not None
 
     # 模拟搜索结果
-    mock_db_client.search.return_value = [
-        ("第一章讲述了基础概念", {"source": "pdf", "page": 1, "chapter": "第一章"}, 0.92),
-        ("第二章详细讨论了高级主题", {"source": "pdf", "page": 15, "chapter": "第二章"}, 0.85),
+    mock_db_client.search_by_embedding.side_effect = [
+        [
+            ("第一章讲述了基础概念", {"source": "pdf", "page": 1, "chapter": "第一章"}, 0.92),
+            ("第二章详细讨论了高级主题", {"source": "pdf", "page": 15, "chapter": "第二章"}, 0.85),
+        ],
+        [
+            ("[image] notes", {"source_file": "notes.pdf", "page": 1, "image_url": "/exports/notes/images/1.png"}, 0.81),
+        ],
     ]
 
     # 执行搜索

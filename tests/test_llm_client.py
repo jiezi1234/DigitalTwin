@@ -146,3 +146,24 @@ def test_llm_client_call_http_error(mock_env):
 
         # Should return None for HTTP errors
         assert result is None
+
+
+def test_llm_client_call_with_model_override(mock_env):
+    """允许临时覆盖模型名"""
+    client = LLMClient()
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "vision response"}}]
+        }
+        mock_post.return_value = mock_response
+
+        result = client.call(
+            messages=[{"role": "user", "content": "test"}],
+            model="qwen-vl-plus",
+        )
+
+        assert result == "vision response"
+        assert mock_post.call_args.kwargs["json"]["model"] == "qwen-vl-plus"

@@ -225,6 +225,50 @@ class DBClient:
                     "error": str(e),
                 }
 
+    def search_by_embedding(
+        self,
+        embedding: List[float],
+        collection_name: str,
+        k: int = 10,
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """使用预计算 query embedding 直接检索"""
+        start_time = time.time()
+        attributes = {"db.collection": collection_name, "operation": "search_by_embedding"}
+        status = "error"
+
+        with tracer.start_as_current_span("db.vector_search_by_embedding") as span:
+            span.set_attribute("db.collection", collection_name)
+            span.set_attribute("db.k", k)
+
+            try:
+                collection = self._chroma_client.get_or_create_collection(name=collection_name)
+                results = collection.query(
+                    query_embeddings=[embedding],
+                    n_results=k,
+                    include=["documents", "metadatas", "distances"],
+                )
+
+                documents = results.get("documents", [[]])[0]
+                metadatas = results.get("metadatas", [[]])[0]
+                distances = results.get("distances", [[]])[0]
+
+                output = []
+                for document, metadata, distance in zip(documents, metadatas, distances):
+                    score = 1.0 / (1.0 + float(distance))
+                    output.append((document, metadata or {}, score))
+
+                status = "success"
+                return output
+            except Exception as e:
+                logger.error(f"按向量搜索失败: {e}")
+                span.record_exception(e)
+                raise
+            finally:
+                duration = time.time() - start_time
+                attributes["status"] = status
+                db_operations_total.add(1, attributes)
+                db_operation_duration.record(duration, attributes)
+
     def bulk_import(
         self,
         collection_name: str,

@@ -66,6 +66,40 @@
       font-family: 'JetBrains Mono', monospace; letter-spacing: 0.08em;
       background: var(--bg-s1); border-top: 1px solid var(--border);
     }
+    .image-results {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .image-card {
+      border: 1px solid var(--border);
+      border-radius: var(--sm-r);
+      background: var(--bg-s2);
+      overflow: hidden;
+    }
+    .image-card a {
+      display: block;
+      line-height: 0;
+    }
+    .image-card img {
+      width: 100%;
+      height: 160px;
+      object-fit: cover;
+      background: var(--bg-s3);
+    }
+    .image-meta {
+      padding: 10px 12px 12px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-2);
+    }
+    .image-meta strong {
+      display: block;
+      color: var(--text-1);
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -201,20 +235,6 @@
     }, 100);
   };
   
-  function mdRender(t, sourcesLen = 0) { 
-    try { 
-      let html = marked.parse(t);
-      html = html.replace(/\[(\d+)\]/g, (match, p1) => {
-         const idx = parseInt(p1);
-         if (idx > 0 && idx <= sourcesLen) {
-            return `<span class="ref-link" data-ref="${idx}" onmouseenter="showRefTooltip(event, this, ${idx})" onmouseleave="hideRefTooltip()">[${idx}]</span>`;
-         }
-         return '';
-      });
-      return html;
-    } catch { return t; } 
-  }
-
   function addMessage(role, text, isMd) {
     if (welcome) welcome.style.display = 'none';
     const div = document.createElement('div');
@@ -266,6 +286,57 @@
     wrapper.appendChild(sd);
   }
 
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+  }
+
+  function renderInlineImage(img) {
+    if (!img || !img.image_url) return '';
+    return `
+      <span class="ref-link">${escapeHtml(img.image_ref || '图片')}</span>
+      <div class="image-results">
+        <div class="image-card">
+          <a href="${img.image_url}" target="_blank" rel="noreferrer">
+            <img src="${img.image_url}" alt="${escapeHtml(img.source_file || 'image')}">
+          </a>
+          <div class="image-meta">
+            <strong>${escapeHtml(img.source_file || '未命名图片')} · P${img.page || '-'}</strong>
+            <div>${escapeHtml((img.nearby_text || '无相关文字').slice(0, 180))}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function mdRender(t, sourcesLen = 0, images = []) {
+    try {
+      let html = marked.parse(t);
+      html = html.replace(/\[(\d+)\]/g, (match, p1) => {
+        const idx = parseInt(p1);
+        if (idx > 0 && idx <= sourcesLen) {
+          return `<span class="ref-link" data-ref="${idx}" onmouseenter="showRefTooltip(event, this, ${idx})" onmouseleave="hideRefTooltip()">[${idx}]</span>`;
+        }
+        return '';
+      });
+      html = html.replace(/\[图(\d+)\]/g, (match, p1) => {
+        const idx = parseInt(p1) - 1;
+        if (idx >= 0 && idx < images.length) {
+          return renderInlineImage(images[idx]);
+        }
+        return match;
+      });
+      return html;
+    } catch {
+      return t;
+    }
+  }
+
   async function send() {
     const text = input.value.trim();
     if (!text || isLoading) return;
@@ -278,7 +349,7 @@
     const { bubble, wrapper } = addMessage('bot', '', true);
     bubble.classList.add('cursor-blink');
 
-    let fullText = '', sources = null;
+    let fullText = '', sources = null, images = null;
     try {
       const resp = await fetch('/tutor/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -296,14 +367,15 @@
           if (!line.startsWith('data: ')) continue;
           try {
             const d = JSON.parse(line.slice(6).trim());
-            if (d.type === 'token') { fullText += d.content; bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0); chatContainer.scrollTop = chatContainer.scrollHeight; }
+            if (d.type === 'token') { fullText += d.content; bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0, images || []); chatContainer.scrollTop = chatContainer.scrollHeight; }
             else if (d.type === 'sources') sources = d.sources;
-            else if (d.error) { fullText += '\n\n⚠️ ' + d.error; bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0); }
+            else if (d.type === 'images') images = d.images;
+            else if (d.error) { fullText += '\n\n⚠️ ' + d.error; bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0, images || []); }
           } catch {}
         }
       }
       bubble.classList.remove('cursor-blink');
-      bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0);
+      bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0, images || []);
       bubble.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch {} });
       if (sources) addSources(wrapper, sources);
       statusBar.textContent = sources && sources.length

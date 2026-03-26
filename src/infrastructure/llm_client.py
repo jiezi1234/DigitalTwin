@@ -53,6 +53,7 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 500,
         top_p: float = 0.9,
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         调用 LLM API
@@ -67,18 +68,19 @@ class LLMClient:
             生成的文本，失败返回 None
         """
         start_time = time.time()
-        attributes = {"llm.model": self.model}
+        active_model = model or self.model
+        attributes = {"llm.model": active_model}
         status = "unknown" # Default status
 
         with tracer.start_as_current_span("llm.api_call") as span:
             try:
                 # 设置 span 属性
-                span.set_attribute("llm.model", self.model)
+                span.set_attribute("llm.model", active_model)
                 span.set_attribute("llm.temperature", temperature)
                 span.set_attribute("llm.max_tokens", max_tokens)
 
                 payload = {
-                    "model": self.model,
+                    "model": active_model,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
@@ -93,7 +95,7 @@ class LLMClient:
 
                 api_endpoint = f"{self.api_base.rstrip('/')}/v1/chat/completions"
 
-                logger.debug(f"调用 LLM API: {self.model}")
+                logger.debug(f"调用 LLM API: {active_model}")
                 response = requests.post(
                     api_endpoint,
                     headers=headers,
@@ -135,6 +137,7 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 1000,
         top_p: float = 0.9,
+        model: Optional[str] = None,
     ):
         """
         调用 LLM API 并返回生成器实现流式输出
@@ -149,13 +152,14 @@ class LLMClient:
             生成的文本片段
         """
         start_time = time.time()
-        attributes = {"llm.model": self.model, "stream": "true"}
+        active_model = model or self.model
+        attributes = {"llm.model": active_model, "stream": "true"}
         status = "unknown"
 
         with tracer.start_as_current_span("llm.api_call_stream") as span:
             try:
                 payload = {
-                    "model": self.model,
+                    "model": active_model,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,

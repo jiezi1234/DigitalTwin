@@ -74,6 +74,11 @@ def create_app():
         """返回数字助教页"""
         return send_from_directory(static_folder, "tutor.html")
 
+    @app.route("/exports/<path:filename>")
+    def exported_assets(filename):
+        """提供导出图片等静态资源"""
+        return send_from_directory(Config.PDF_EXPORT_ROOT, filename)
+
     return app
 
 

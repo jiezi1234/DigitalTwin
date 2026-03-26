@@ -13,10 +13,9 @@ from src.services.rag_service import RAGService
 logger = logging.getLogger(__name__)
 chat_bp = Blueprint("chat", __name__)
 
-# 初始化基础设施
-db_client = DBClient()
-llm_client = LLMClient()
 persona_manager = PersonaManager(Config.CHROMA_PERSIST_DIR)
+db_client = None
+llm_client = None
 
 # 会话存储 (简易内存版)
 sessions = {}
@@ -24,13 +23,27 @@ sessions = {}
 # RAG 服务缓存 (persona_id -> RAGService)
 rag_services = {}
 
+
+def get_db_client():
+    global db_client
+    if db_client is None:
+        db_client = DBClient()
+    return db_client
+
+
+def get_llm_client():
+    global llm_client
+    if llm_client is None:
+        llm_client = LLMClient()
+    return llm_client
+
 def get_rag_service(persona):
     pid = persona["id"]
     if pid not in rag_services:
         source_type = persona.get("source_type", "chat")
         rag_services[pid] = RAGService(
-            llm_client=llm_client,
-            db_client=db_client,
+            llm_client=get_llm_client(),
+            db_client=get_db_client(),
             collection_name=persona["collection"],
             enable_self_rag=True,
             self_rag_mode="knowledge" if source_type == "knowledge" else "chat",
