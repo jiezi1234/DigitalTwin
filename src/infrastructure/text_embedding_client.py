@@ -27,7 +27,7 @@ class TextEmbeddingClient:
         self,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model: str = "text-embedding-v4",
+        model: Optional[str] = None,
         timeout: int = 60,
     ):
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
@@ -35,7 +35,7 @@ class TextEmbeddingClient:
             "DASHSCOPE_TEXT_EMBED_API_BASE",
             "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings",
         )
-        self.model = model
+        self.model = model or os.getenv("EMBED_MODEL", "text-embedding-v4")
         self.timeout = timeout
         self.max_concurrency = int(os.getenv("DASHSCOPE_TEXT_MAX_CONCURRENCY", "2"))
 

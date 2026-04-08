@@ -24,11 +24,25 @@ root_logger.setLevel(_root_level)
 
 console_handler = logging.StreamHandler()
 console_handler.setLevel(_console_level)
-console_handler.setFormatter(logging.Formatter(
+formatter = logging.Formatter(
     "[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-))
+)
+console_handler.setFormatter(formatter)
 root_logger.addHandler(console_handler)
+
+log_file = os.getenv("LOG_FILE", "logs/app.log")
+if log_file:
+    import logging.handlers
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    max_bytes = int(os.getenv("LOG_MAX_BYTES", 10485760))
+    backup_count = int(os.getenv("LOG_BACKUP_COUNT", 5))
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=max_bytes, backupCount=backup_count, encoding='utf-8'
+    )
+    file_handler.setLevel(_root_level)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
 
 # 抑制 urllib3 连接池噪音日志（监控组件的 HTTP 请求）
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)

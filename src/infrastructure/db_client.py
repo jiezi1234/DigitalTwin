@@ -328,6 +328,72 @@ class DBClient:
                 db_operations_total.add(1, attributes)
                 db_operation_duration.record(duration, attributes)
 
+    def search_by_keywords(
+        self,
+        collection_name: str,
+        keywords: List[str],
+        k: int = 20,
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """
+        对 collection 内全文做轻量关键词检索（lexical fallback）。
+
+        说明：
+        - 不依赖向量相似度，适合作为“召回兜底”。
+        - 分数为关键词命中率（命中关键词数 / 关键词总数）。
+        """
+        start_time = time.time()
+        attributes = {"db.collection": collection_name, "operation": "search_by_keywords"}
+        status = "error"
+
+        with tracer.start_as_current_span("db.keyword_search") as span:
+            span.set_attribute("db.collection", collection_name)
+            span.set_attribute("db.k", k)
+
+            normalized = []
+            seen_kw = set()
+            for kw in keywords or []:
+                token = str(kw).strip().lower()
+                if not token or token in seen_kw:
+                    continue
+                seen_kw.add(token)
+                normalized.append(token)
+
+            if not normalized:
+                status = "success"
+                return []
+
+            try:
+                collection = self._chroma_client.get_or_create_collection(name=collection_name)
+                payload = collection.get(include=["documents", "metadatas"])
+                documents = payload.get("documents", []) or []
+                metadatas = payload.get("metadatas", []) or []
+
+                scored = []
+                total_kw = len(normalized)
+                for idx, doc in enumerate(documents):
+                    if not doc:
+                        continue
+                    content = str(doc).lower()
+                    hit_count = sum(1 for kw in normalized if kw in content)
+                    if hit_count <= 0:
+                        continue
+                    score = hit_count / total_kw
+                    metadata = metadatas[idx] if idx < len(metadatas) else {}
+                    scored.append((str(doc), metadata or {}, float(score)))
+
+                scored.sort(key=lambda x: x[2], reverse=True)
+                status = "success"
+                return scored[:k]
+            except Exception as e:
+                logger.error(f"关键词检索失败: {e}")
+                span.record_exception(e)
+                return []
+            finally:
+                duration = time.time() - start_time
+                attributes["status"] = status
+                db_operations_total.add(1, attributes)
+                db_operation_duration.record(duration, attributes)
+
     def delete_collection(self, collection_name: str) -> bool:
         """删除集合（仅用于测试和重置）"""
         try:

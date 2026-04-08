@@ -40,13 +40,10 @@ def get_llm_client():
 def get_rag_service(persona):
     pid = persona["id"]
     if pid not in rag_services:
-        source_type = persona.get("source_type", "chat")
         rag_services[pid] = RAGService(
             llm_client=get_llm_client(),
             db_client=get_db_client(),
             collection_name=persona["collection"],
-            enable_self_rag=True,
-            self_rag_mode="knowledge" if source_type == "knowledge" else "chat",
         )
     return rag_services[pid]
 
@@ -88,8 +85,6 @@ def chat():
             query=user_message,
             conversation=messages[:-1], # 传入历史
             persona=persona,
-            system_prefix=Config.RAG_SYSTEM_PREFIX,
-            role_instruction=Config.RAG_ROLE_INSTRUCTION,
             max_tokens=persona.get("model_params", {}).get("max_tokens", 500)
         )
 

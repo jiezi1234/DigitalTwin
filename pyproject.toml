@@ -34,10 +34,10 @@ dev = [
 
 [project.scripts]
 digitaltwin-server = "src.run_server:main"
-digitaltwin-import = "src.import_wechat_csv:main"
-digitaltwin-export-pdf = "src.export_pdf_assets:main"
-digitaltwin-rebuild-mm-pdf = "src.rebuild_multimodal_pdf_index:main"
-digitaltwin-import-course-materials = "src.import_course_materials:main"
+digitaltwin-import = "src.skills.wechat_csv_import.scripts.import_wechat_csv_cli:main"
+digitaltwin-export-pdf = "src.skills.pdf_assets_export.scripts.export_pdf_assets_cli:main"
+digitaltwin-rebuild-mm-pdf = "src.skills.multimodal_pdf_rebuild.scripts.rebuild_multimodal_pdf_index_cli:main"
+digitaltwin-import-course-materials = "src.skills.course_material_import.scripts.import_course_materials_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

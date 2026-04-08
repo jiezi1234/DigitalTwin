@@ -1,5 +1,5 @@
 """
-数字助教路由 (Tutor)
+数字助教路由 (Tutor) — Agent 架构版
 """
 
 import logging
@@ -12,9 +12,13 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context
 from src.api.config import Config
 from src.infrastructure.llm_client import LLMClient
 from src.infrastructure.db_client import DBClient
+from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.services.textbook_rag_service import TextbookRAGService
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
+from src.agent.tutor_react_agent import TutorReActAgent
+from src.skills.textbook_retrieval.scripts.textbook_text_skill import TextbookTextSkill
+from src.skills.textbook_retrieval.scripts.textbook_image_skill import TextbookImageSkill
 
 logger = logging.getLogger(__name__)
 tutor_bp = Blueprint("tutor", __name__)
@@ -23,10 +27,12 @@ tutor_bp = Blueprint("tutor", __name__)
 db_client = DBClient()
 llm_client = LLMClient()
 mm_client = MultiModalEmbeddingClient(model=Config.MM_EMBED_MODEL)
+text_client = TextEmbeddingClient(model=Config.EMBED_MODEL)
 tutor_sessions = {}
 
-# 懒加载 TextbookRAGService
-_tutor_rag_service = None
+# 懒加载 — 整个助教 Agent（含两个技能）
+_tutor_agent: TutorReActAgent = None
+_tutor_rag_service: TextbookRAGService = None
 
 
 def _local_image_to_data_url(relative_path: str) -> str:
@@ -46,10 +52,8 @@ def _build_multimodal_messages(
     image_hits: list,
 ) -> list:
     messages = [{"role": "system", "content": system_content}]
-
     for item in conversation:
         messages.append(item)
-
     content = [{"type": "text", "text": user_message}]
     for image in image_hits[:3]:
         image_path = image.get("image_path")
@@ -62,11 +66,11 @@ def _build_multimodal_messages(
             })
         except Exception as exc:
             logger.warning(f"读取命中图片失败，已跳过: {image_path} - {exc}")
-
     messages.append({"role": "user", "content": content})
     return messages
 
-def get_tutor_service():
+
+def get_tutor_rag_service() -> TextbookRAGService:
     global _tutor_rag_service
     if _tutor_rag_service is None:
         try:
@@ -75,14 +79,40 @@ def get_tutor_service():
                 db_client=db_client,
                 text_collection_name=Config.TUTOR_MM_TEXT_COLLECTION,
                 image_collection_name=Config.TUTOR_MM_IMAGE_COLLECTION,
+                ocr_collection_name=Config.TUTOR_OCR_TEXT_COLLECTION,
+                enable_query_rewriting=False,
+                mm_client=mm_client,
+                text_client=text_client,
             )
+            logger.info("[Tutor] TextbookRAGService 初始化完成")
         except Exception as e:
-            logger.warning(f"助教服务初始化失败 (可能未导入课本): {e}")
+            logger.warning(f"[Tutor] RAG Service 初始化失败: {e}")
     return _tutor_rag_service
+
+
+def get_tutor_agent() -> TutorReActAgent:
+    global _tutor_agent
+    if _tutor_agent is None:
+        rag_service = get_tutor_rag_service()
+        if rag_service is None:
+            return None
+        try:
+            text_skill = TextbookTextSkill(rag_service=rag_service, text_k=8)
+            image_skill = TextbookImageSkill(rag_service=rag_service, image_k=4)
+            _tutor_agent = TutorReActAgent(
+                llm_client=llm_client,
+                tools=[text_skill, image_skill],
+                max_iterations=5,
+            )
+            logger.info("[Tutor] TutorReActAgent 初始化完成，已加载技能: search_textbook_text, search_textbook_images")
+        except Exception as e:
+            logger.warning(f"[Tutor] Agent 初始化失败: {e}")
+    return _tutor_agent
+
 
 @tutor_bp.route("/tutor/chat", methods=["POST"])
 def tutor_chat():
-    """助教对话 (支持流式)"""
+    """助教对话 — ReAct Agent 架构 (支持流式)"""
     data = request.get_json()
     user_message = data.get("message", "").strip()
     session_id = data.get("session_id", "tutor-default")
@@ -91,130 +121,91 @@ def tutor_chat():
     if not user_message:
         return jsonify({"status": "error", "error": "消息不能为空"}), 400
 
-    logger.debug(f"[用户输入] session={session_id} | {user_message}")
+    logger.info(f"[Tutor Agent] 新请求汇入 session={session_id}: {user_message}")
 
-    service = get_tutor_service()
+    agent = get_tutor_agent()
+    rag_service = get_tutor_rag_service()
+
     if session_id not in tutor_sessions:
         tutor_sessions[session_id] = []
     messages = tutor_sessions[session_id]
     messages.append({"role": "user", "content": user_message})
 
-    # RAG 检索
-    context_text = ""
-    image_context = ""
-    results = []
-    image_results = []
+    # ── Agent 推理（非流式，内部思考 + 工具调用）──────────────────────
+    reply_text = ""
     image_hits = []
-    if service:
+    text_results = []
+
+    if agent:
         try:
-            retrieval = service.retrieve(user_message, text_k=8, image_k=4)
-            results = retrieval["text_results"]
-            image_results = retrieval["image_results"]
-            if results:
-                context_text = service.format_context(
-                    results, max_context_length=Config.TUTOR_MAX_CONTEXT_LENGTH
-                )
-            if image_results:
-                image_context = service.format_image_context(image_results)
-                image_hits = service.serialize_images(image_results)
-            logger.info(
-                "[Tutor Retrieval] session=%s text_hits=%d image_hits=%d vl_model=%s",
-                session_id,
-                len(results),
-                len(image_hits),
-                Config.TUTOR_VL_MODEL,
+            reply_text, image_hits, text_results = agent.run(
+                query=user_message,
+                conversation_history=messages[:-1],
+                max_tokens=Config.TUTOR_MAX_TOKENS,
+                model=Config.TUTOR_VL_MODEL,
             )
         except Exception as e:
-            logger.error(f"助教检索异常: {e}")
+            logger.error(f"[Tutor Agent] Agent 推理异常: {e}")
+            reply_text = "抱歉，处理你的问题时出现了错误，请稍后再试。"
+    else:
+        logger.warning("[Tutor Agent] Agent 未初始化，返回兜底回复。")
+        reply_text = "助教服务尚未就绪（可能未导入课本），请先通过控制台喂入教材资料。"
 
-    # 构建 Prompt
-    system_content = Config.TUTOR_SYSTEM_PROMPT
-    if context_text:
-        system_content = f"以下是相关课本内容：\n\n{context_text}\n\n{Config.TUTOR_SYSTEM_PROMPT}"
-    if image_context:
-        system_content = (
-            f"{system_content}\n\n以下是检索到的相关图片及其附近文字：\n\n{image_context}\n\n"
-            "如果检索结果中提供了图片标记，例如 [图1]、[图2]，说明这些图片已经可供你直接引用。"
-            "当图片有助于回答时，请在合适的位置直接插入对应标记，例如 [图1]。"
-            "这些标记会由系统渲染为实际图片，因此不要说“我无法展示图片”“我不能显示图片”"
-            "“我只能描述图片”或类似表述。"
-            "当用户明确要求展示图片、给出图片或结合图片说明时，优先至少引用一张最相关图片。"
-            "不要输出图片 URL，也不要在结尾重复罗列图片；只使用 [图1]、[图2] 这类标记。"
-        )
+    # ── 若有图片命中，附加图片内容给 LLM 进行多模态最终生成 ─────────────
+    # Agent 已经内部调用了 qwen-vl-plus 做最终回答（含思考），
+    # 此处直接推流已得到的 reply_text，保持与前端协议兼容。
+    # ── 清洗 reply：去掉 LLM 可能自己写的"参考资料"尾巴，系统会单独渲染引用 ──
+    import re as _re
+    reply_text = _re.sub(
+        r'\n*[\-—\*]*\s*(参考资料|参考来源|引用来源|参考文献|来源)[：:：]?[\s\S]*$',
+        '',
+        reply_text,
+        flags=_re.IGNORECASE,
+    ).rstrip()
 
-    history_messages = messages[:-1]
-    gen_messages = _build_multimodal_messages(
-        system_content=system_content,
-        conversation=history_messages,
-        user_message=user_message,
-        image_hits=image_hits,
-    )
+    messages.append({"role": "assistant", "content": reply_text})
+    # 提取 sources（基于 reply 中的 [1][2] 引用编号）
+    # 如果 LLM 没有显式写 [1][2]，则自动展示所有命中段落的来源（最多5条）
+    if rag_service and text_results:
+        sources, mapping = rag_service.get_sources(text_results, reply=reply_text)
+        if not sources:
+            # Fallback: no citation markers found, include all unique sources
+            sources, mapping = rag_service.get_sources(text_results, reply=None)
+            
+        if mapping:
+            import re as _re
+            def repl_cite(m):
+                idx = int(m.group(1))
+                if idx in mapping:
+                    return f"[{mapping[idx]}]"
+                return m.group(0)
+            reply_text = _re.sub(r'\[(\d+)\]', repl_cite, reply_text)
+            messages[-1]["content"] = reply_text
+    else:
+        sources = []
+
+    # 会话截断
+    if len(messages) > 40:
+        tutor_sessions[session_id] = messages[-40:]
 
     if stream:
         def generate():
-            full_reply = []
-            logger.info(
-                "[Tutor Generate] session=%s text_hits=%d image_hits=%d vl_model=%s stream=%s",
-                session_id,
-                len(results),
-                len(image_hits),
-                Config.TUTOR_VL_MODEL,
-                True,
-            )
-
-            # 调用 LLM 流式接口
-            for chunk in llm_client.call_stream(
-                gen_messages,
-                max_tokens=Config.TUTOR_MAX_TOKENS,
-                model=Config.TUTOR_VL_MODEL,
-            ):
-                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
-                full_reply.append(chunk)
-
-            # 回答完成后，根据实际引用提取 sources
-            reply_text = "".join(full_reply)
-            sources = service.get_sources(results, reply=reply_text) if service and results else []
+            # 字符流式推送（逐字符，前端体验）
+            for char in reply_text:
+                yield f"data: {json.dumps({'type': 'token', 'content': char})}\n\n"
             yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
             yield f"data: {json.dumps({'type': 'images', 'images': image_hits})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
-            if full_reply:
-                messages.append({"role": "assistant", "content": reply_text})
-
-            # 会话截断
-            if len(messages) > 40:
-                tutor_sessions[session_id] = messages[-40:]
-
         return Response(stream_with_context(generate()), mimetype="text/event-stream")
     else:
-        logger.info(
-            "[Tutor Generate] session=%s text_hits=%d image_hits=%d vl_model=%s stream=%s",
-            session_id,
-            len(results),
-            len(image_hits),
-            Config.TUTOR_VL_MODEL,
-            False,
-        )
-        reply = llm_client.call(
-            gen_messages,
-            max_tokens=Config.TUTOR_MAX_TOKENS,
-            model=Config.TUTOR_VL_MODEL,
-        )
-        messages.append({"role": "assistant", "content": reply})
-
-        # 根据实际引用提取 sources
-        sources = service.get_sources(results, reply=reply) if service and results else []
-
-        # 会话截断
-        if len(messages) > 40:
-            tutor_sessions[session_id] = messages[-40:]
-
         return jsonify({
             "status": "success",
-            "reply": reply,
+            "reply": reply_text,
             "sources": sources,
             "images": image_hits,
         })
+
 
 @tutor_bp.route("/tutor/import", methods=["POST"])
 def tutor_import():
@@ -232,14 +223,16 @@ def tutor_import():
                 text_collection=Config.TUTOR_MM_TEXT_COLLECTION,
                 image_collection=Config.TUTOR_MM_IMAGE_COLLECTION,
             )
-            global _tutor_rag_service
+            global _tutor_rag_service, _tutor_agent
             _tutor_rag_service = None
-            logger.info("后台课本导入完成")
+            _tutor_agent = None
+            logger.info("后台课本导入完成，Agent 将在下次请求时重新初始化")
         except Exception as e:
             logger.error(f"后台课本导入失败: {e}")
 
     threading.Thread(target=do_import, daemon=True).start()
     return jsonify({"status": "success", "message": "已在后台启动导入"})
+
 
 @tutor_bp.route("/tutor/reset", methods=["POST"])
 def tutor_reset():
@@ -250,7 +243,11 @@ def tutor_reset():
 
 @tutor_bp.route("/tutor/stats", methods=["GET"])
 def tutor_stats():
-    service = get_tutor_service()
-    if not service:
+    rag_service = get_tutor_rag_service()
+    if not rag_service:
         return jsonify({"status": "error", "error": "助教服务未初始化"}), 500
-    return jsonify({"status": "success", "data": service.get_stats()})
+    agent = get_tutor_agent()
+    stats = rag_service.get_stats()
+    stats["agent_ready"] = agent is not None
+    stats["agent_tools"] = list(agent.tools.keys()) if agent else []
+    return jsonify({"status": "success", "data": stats})
