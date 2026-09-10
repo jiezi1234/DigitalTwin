@@ -371,12 +371,14 @@ class RAGEngine:
         db_client: DBClient,
         lexical_retriever: Optional[BM25Retriever] = None,
         reranker: Optional[LLMReranker] = None,
+        metadata_filter_builder: Optional[MetadataFilterBuilder] = None,
     ):
         """
         Args:
             db_client: 数据库客户端
             lexical_retriever: 可选的 BM25 关键词检索器
             reranker: 可选的 LLM 候选重排器
+            metadata_filter_builder: 可选的结构化时间过滤器
         """
 
     def search(
@@ -394,6 +396,7 @@ class RAGEngine:
         bm25_weight: float = 1.0,
         rerank: bool = False,
         rerank_candidates: int = 20,
+        metadata_filtering: bool = False,
         **kwargs,
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
@@ -413,6 +416,7 @@ class RAGEngine:
             bm25_weight: BM25 通道权重
             rerank: 是否执行候选相关性重排
             rerank_candidates: 送入重排器的候选数
+            metadata_filtering: 应用查询理解产生的时间范围
             **kwargs: 其他参数（如 persona）
 
         Returns:
@@ -471,6 +475,8 @@ class RAGService:
         enable_reranking: bool = False,
         rerank_model: str = "qwen-turbo",
         rerank_candidates: int = 20,
+        enable_metadata_filtering: bool = False,
+        timezone_offset: str = "+08:00",
         react_router: Optional[ReActRetrievalRouter] = None,
     ):
         """
@@ -486,6 +492,8 @@ class RAGService:
             enable_reranking: 启用 LLM 候选重排
             rerank_model: 重排模型
             rerank_candidates: 单次重排候选数
+            enable_metadata_filtering: 启用结构化时间过滤
+            timezone_offset: 日期边界采用的 UTC 偏移
             react_router: 可选的 ReAct 检索工具路由器
         """
 
@@ -579,6 +587,8 @@ LLM_REWRITING_MODEL=qwen-plus  # 默认模型
 RAG_RERANK_ENABLED=true        # 启用候选重排
 RAG_RERANK_MODEL=qwen-turbo    # 重排模型
 RAG_RERANK_CANDIDATES=20       # 单次重排候选数
+RAG_METADATA_FILTERING_ENABLED=true # 启用结构化时间过滤
+RAG_TIMEZONE_OFFSET=+08:00     # 无时区日期使用的 UTC 偏移
 
 # 数据库配置
 CHROMA_PERSIST_DIR=./chroma_db # ChromaDB 持久化目录

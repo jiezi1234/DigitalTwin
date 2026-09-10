@@ -131,6 +131,7 @@ class DBClient:
         fetch_k: Optional[int] = None,
         lambda_mult: float = 0.6,
         use_mmr: bool = True,
+        where: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
         搜索向量数据库
@@ -142,6 +143,7 @@ class DBClient:
             fetch_k: MMR 预取数（若为 None，则为 k * 4）
             lambda_mult: MMR 多样性权重
             use_mmr: 是否使用 MMR 搜索（推荐用于多样性）
+            where: 可选的 Chroma metadata filter
 
         Returns:
             List of (content, metadata, score)
@@ -154,17 +156,28 @@ class DBClient:
             span.set_attribute("db.collection", collection_name)
             span.set_attribute("db.query", query[:100])
             span.set_attribute("db.k", k)
+            span.set_attribute("db.filtered", bool(where))
 
             try:
                 vectorstore = self._get_or_create_vectorstore(collection_name)
 
                 if use_mmr:
                     fetch_k = fetch_k or max(k * 4, 60)
+                    search_kwargs = {
+                        "k": k,
+                        "fetch_k": fetch_k,
+                        "lambda_mult": lambda_mult,
+                    }
+                    if where:
+                        search_kwargs["filter"] = where
                     docs = vectorstore.max_marginal_relevance_search(
-                        query, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult
+                        query, **search_kwargs
                     )
                 else:
-                    docs = vectorstore.similarity_search(query, k=k)
+                    search_kwargs = {"k": k}
+                    if where:
+                        search_kwargs["filter"] = where
+                    docs = vectorstore.similarity_search(query, **search_kwargs)
 
                 results = []
                 for doc in docs:

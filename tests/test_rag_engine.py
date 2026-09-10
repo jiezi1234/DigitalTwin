@@ -1,9 +1,10 @@
 import pytest
 from unittest.mock import MagicMock
 from src.rag.rag_engine import RAGEngine
-from src.rag.query_processor import QueryProcessor
+from src.rag.query_processor import QueryProcessor, QueryUnderstanding
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
+from src.rag.metadata_filter import MetadataFilterBuilder
 from src.infrastructure.db_client import DBClient
 
 
@@ -22,7 +23,10 @@ def mock_db_client():
 def mock_query_processor():
     """Mock 查询处理器"""
     processor = MagicMock(spec=QueryProcessor)
-    processor.process.return_value = "处理后的查询"
+    processor.process_structured.return_value = QueryUnderstanding(
+        original_query="test query",
+        standalone_query="处理后的查询",
+    )
     return processor
 
 
@@ -147,6 +151,37 @@ def test_rag_engine_retrieves_extra_candidates_before_reranking(
         top_k=1,
         candidate_limit=10,
     )
+
+
+def test_rag_engine_applies_time_filter_to_dense_and_bm25(mock_db_client):
+    understanding = QueryUnderstanding(
+        original_query="去年说过什么",
+        standalone_query="2025年说过什么",
+        time_range={"start": "2025-01-01", "end": "2025-12-31"},
+    )
+    query_processor = MagicMock(spec=QueryProcessor)
+    query_processor.process_structured.return_value = understanding
+    bm25_retriever = MagicMock(spec=BM25Retriever)
+    bm25_retriever.search.return_value = []
+    engine = RAGEngine(
+        db_client=mock_db_client,
+        lexical_retriever=bm25_retriever,
+        metadata_filter_builder=MetadataFilterBuilder("+08:00"),
+    )
+
+    results = engine.search(
+        query="去年说过什么",
+        collection_name="persona",
+        query_processor=query_processor,
+        hybrid_search=True,
+        metadata_filtering=True,
+    )
+
+    dense_where = mock_db_client.search.call_args.kwargs["where"]
+    bm25_where = bm25_retriever.search.call_args.kwargs["where"]
+    assert dense_where == bm25_where
+    assert "$and" in dense_where
+    assert results[0][1]["metadata_filter_applied"] is True
 
 
 def test_rag_engine_format_context(mock_db_client):

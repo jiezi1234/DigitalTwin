@@ -133,7 +133,7 @@ class DataLoaderFactory:
 
 - `standalone_query`：结合最近会话消解指代后的独立检索查询
 - `entities`：问题中的人物、地点、课程术语等实体
-- `time_range`：可识别的时间范围，为后续元数据过滤预留
+- `time_range`：仅在问题显式包含时间条件时生成，并依据当前日期规范化为 ISO 日期后用于元数据过滤
 - 结构化响应无法解析或模型调用失败时回退到原查询
 
 **使用示例：**
@@ -166,6 +166,9 @@ RAGEngine 将 Dense/MMR 与 BM25 的候选排名通过加权 RRF 融合，避免
 可组合的 `LLMReranker` 随后用一次结构化调用对 Top-N 候选做相关性评分，
 再截取最终 Top-K。候选内容以不可信 JSON 数据传入；模型失败、输出缺失或
 解析异常时保持 RRF 原排名，避免重排服务成为单点故障。
+`MetadataFilterBuilder` 将查询理解中的 ISO 日期按配置时区转换为秒级时间戳，
+并把相同的 Chroma 条件同时交给 Dense/MMR 与 BM25。无时间条件、日期无效或
+起止时间倒置时不生成过滤器，防止错误约束导致整条检索链路失效。
 
 **核心方法：**
 
@@ -183,6 +186,7 @@ RAGEngine 将 Dense/MMR 与 BM25 的候选排名通过加权 RRF 融合，避免
        rrf_k=60,
        rerank=True,
        rerank_candidates=20,
+       metadata_filtering=True,
    )
    # 返回 List[Tuple[content, metadata, score]]
    ```
@@ -279,6 +283,8 @@ context = service.format_context(results)
 ReActRetrievalRouter (retrieve / respond)
     ↓ retrieve                 ↓ respond
 历史感知 QueryProcessor       跳过向量检索
+    ↓
+结构化时间范围过滤
     ↓
 Dense/MMR + BM25
     ↓

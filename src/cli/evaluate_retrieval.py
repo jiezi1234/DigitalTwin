@@ -13,6 +13,7 @@ from src.infrastructure.db_client import DBClient
 from src.infrastructure.llm_client import LLMClient
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
+from src.rag.metadata_filter import MetadataFilterBuilder
 from src.rag.query_processor import QueryProcessor
 from src.rag.rag_engine import RAGEngine
 
@@ -56,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="关闭优化组的 LLM 候选重排",
     )
+    parser.add_argument(
+        "--no-metadata-filtering",
+        action="store_true",
+        help="关闭优化组的结构化时间范围过滤",
+    )
     return parser
 
 
@@ -84,6 +90,10 @@ def main() -> None:
         os.getenv("RAG_RERANK_ENABLED", "true").lower() == "true"
         and not args.no_reranking
     )
+    metadata_filtering_enabled = (
+        os.getenv("RAG_METADATA_FILTERING_ENABLED", "true").lower() == "true"
+        and not args.no_metadata_filtering
+    )
     bm25_retriever = BM25Retriever(db_client) if hybrid_search_enabled else None
     reranker = (
         LLMReranker(
@@ -97,6 +107,13 @@ def main() -> None:
         db_client=db_client,
         lexical_retriever=bm25_retriever,
         reranker=reranker,
+        metadata_filter_builder=(
+            MetadataFilterBuilder(
+                timezone_offset=os.getenv("RAG_TIMEZONE_OFFSET", "+08:00")
+            )
+            if metadata_filtering_enabled
+            else None
+        ),
     )
     processor = QueryProcessor(
         llm_client=llm_client,
@@ -127,6 +144,7 @@ def main() -> None:
             bm25_weight=float(os.getenv("RAG_BM25_WEIGHT", "1.0")),
             rerank=reranking_enabled,
             rerank_candidates=int(os.getenv("RAG_RERANK_CANDIDATES", "20")),
+            metadata_filtering=metadata_filtering_enabled,
             persona=case.persona,
         )
         if not neighbor_expansion_enabled:
@@ -146,6 +164,8 @@ def main() -> None:
         optimized_features.append("hybrid_rrf")
     if reranking_enabled:
         optimized_features.append("llm_rerank")
+    if metadata_filtering_enabled:
+        optimized_features.append("metadata_filter")
     if neighbor_expansion_enabled:
         optimized_features.append("neighbors")
 

@@ -101,12 +101,15 @@ class WeChatCSVLoader(DataLoader):
 
     @staticmethod
     def _normalize_chat_time(value: object) -> Union[int, str]:
-        """将数字时间戳保存为整数，其余时间格式保留原文。"""
+        """将数字时间戳统一为秒，其余时间格式保留原文。"""
         text = str(value or "").strip()
         if not text:
             return ""
         try:
-            return int(float(text))
+            timestamp = int(float(text))
+            while abs(timestamp) > 9_999_999_999:
+                timestamp //= 1000
+            return timestamp
         except ValueError:
             return text
 

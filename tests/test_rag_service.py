@@ -87,6 +87,8 @@ def test_rag_service_chat_retrieves_and_generates_once(mock_components):
         "retrieval_mode": "dense",
         "reranking_enabled": False,
         "reranked": False,
+        "metadata_filtering_enabled": False,
+        "metadata_filtered": False,
         "result_count": 1,
         "semantic_result_count": 1,
         "neighbor_count": 0,

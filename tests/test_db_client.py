@@ -76,6 +76,33 @@ def test_db_client_search(mock_env):
                 assert results[0][0] == "test result"
 
 
+def test_db_client_passes_metadata_filter_to_mmr(mock_env):
+    with patch("chromadb.PersistentClient"):
+        with patch("src.infrastructure.db_client.DashScopeEmbeddings"):
+            client = DBClient(persist_dir="./chroma_db_test")
+            mock_vectorstore = MagicMock()
+            mock_vectorstore.max_marginal_relevance_search.return_value = []
+            where = {"chat_time": {"$gte": 100}}
+
+            with patch.object(
+                client, "_get_or_create_vectorstore", return_value=mock_vectorstore
+            ):
+                client.search(
+                    "test query",
+                    collection_name="test",
+                    k=5,
+                    where=where,
+                )
+
+            mock_vectorstore.max_marginal_relevance_search.assert_called_once_with(
+                "test query",
+                k=5,
+                fetch_k=60,
+                lambda_mult=0.6,
+                filter=where,
+            )
+
+
 def test_db_client_get_stats(mock_env):
     """获取数据库统计信息"""
     with patch("chromadb.PersistentClient"):

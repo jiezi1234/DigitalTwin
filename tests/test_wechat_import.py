@@ -87,6 +87,7 @@ def test_dataloader_batch_and_incremental():
 
 def test_wechat_loader_normalizes_numeric_timestamp():
     assert WeChatCSVLoader._normalize_chat_time("1710000000") == 1710000000
+    assert WeChatCSVLoader._normalize_chat_time("1710000000000") == 1710000000
     assert (
         WeChatCSVLoader._normalize_chat_time("2026-09-10 08:00") == "2026-09-10 08:00"
     )

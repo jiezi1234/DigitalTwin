@@ -64,7 +64,11 @@ class BM25Retriever:
                 self._indexes.pop(collection_name, None)
 
     def search(
-        self, query: str, collection_name: str, k: int = 15
+        self,
+        query: str,
+        collection_name: str,
+        k: int = 15,
+        where: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResult]:
         """返回按 BM25 分数降序排列的文档。"""
         with tracer.start_as_current_span("bm25.search") as span:
@@ -85,6 +89,8 @@ class BM25Retriever:
             for record, frequencies, document_length in zip(
                 index.records, index.term_frequencies, index.document_lengths
             ):
+                if where and not self._matches_where(record[1], where):
+                    continue
                 score = 0.0
                 length_ratio = document_length / index.average_document_length
                 normalization = self.k1 * (1.0 - self.b + self.b * length_ratio)
@@ -112,6 +118,40 @@ class BM25Retriever:
             results = scored_results[:k]
             span.set_attribute("bm25.results_count", len(results))
             return results
+
+    @classmethod
+    def _matches_where(cls, metadata: Dict[str, Any], where: Dict[str, Any]) -> bool:
+        """在缓存索引上执行本项目使用的 Chroma filter 子集。"""
+        if "$and" in where:
+            return all(cls._matches_where(metadata, item) for item in where["$and"])
+        if "$or" in where:
+            return any(cls._matches_where(metadata, item) for item in where["$or"])
+
+        for key, condition in where.items():
+            actual = metadata.get(key)
+            if not isinstance(condition, dict):
+                if actual != condition:
+                    return False
+                continue
+            for operator, expected in condition.items():
+                try:
+                    if operator == "$eq" and actual != expected:
+                        return False
+                    if operator == "$ne" and actual == expected:
+                        return False
+                    if operator == "$gt" and not actual > expected:
+                        return False
+                    if operator == "$gte" and not actual >= expected:
+                        return False
+                    if operator == "$lt" and not actual < expected:
+                        return False
+                    if operator == "$lte" and not actual <= expected:
+                        return False
+                    if operator == "$in" and actual not in expected:
+                        return False
+                except (TypeError, ValueError):
+                    return False
+        return True
 
     def _get_index(self, collection_name: str) -> Tuple[_BM25Index, bool]:
         with self._lock:

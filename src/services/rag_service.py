@@ -5,6 +5,7 @@ from src.infrastructure.db_client import DBClient
 from src.rag.rag_engine import RAGEngine
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
+from src.rag.metadata_filter import MetadataFilterBuilder
 from src.rag.query_processor import QueryProcessor
 from src.rag.react_router import ReActRetrievalRouter
 from src.infrastructure.telemetry import get_tracer
@@ -38,6 +39,8 @@ class RAGService:
         rerank_model: str = "qwen-turbo",
         rerank_candidates: int = 20,
         reranker: Optional[LLMReranker] = None,
+        enable_metadata_filtering: bool = False,
+        timezone_offset: str = "+08:00",
         react_router: Optional[ReActRetrievalRouter] = None,
         retrieval_enabled: bool = True,
         max_results: int = 15,
@@ -68,6 +71,8 @@ class RAGService:
             rerank_model: 重排使用的模型
             rerank_candidates: 送入重排器的候选数
             reranker: 可注入的候选重排器
+            enable_metadata_filtering: 是否应用查询理解产生的时间约束
+            timezone_offset: 无时区日期采用的 UTC 偏移
             react_router: 可选的 ReAct 检索工具路由器
             retrieval_enabled: 是否允许调用检索工具
             max_results: 单次检索的最大结果数
@@ -95,6 +100,7 @@ class RAGService:
             self.dense_weight = 1.0
         self.enable_reranking = enable_reranking
         self.rerank_candidates = max(1, rerank_candidates)
+        self.enable_metadata_filtering = enable_metadata_filtering
 
         # 初始化核心组件
         lexical_retriever = bm25_retriever
@@ -106,10 +112,16 @@ class RAGService:
                 llm_client=llm_client,
                 model=rerank_model,
             )
+        metadata_filter_builder = (
+            MetadataFilterBuilder(timezone_offset=timezone_offset)
+            if self.enable_metadata_filtering
+            else None
+        )
         self.rag_engine = RAGEngine(
             db_client=db_client,
             lexical_retriever=lexical_retriever,
             reranker=active_reranker,
+            metadata_filter_builder=metadata_filter_builder,
         )
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
@@ -157,6 +169,7 @@ class RAGService:
             bm25_weight=self.bm25_weight,
             rerank=self.enable_reranking,
             rerank_candidates=self.rerank_candidates,
+            metadata_filtering=self.enable_metadata_filtering,
             persona=persona,
             conversation=conversation,
         )
@@ -245,6 +258,11 @@ class RAGService:
                 "reranking_enabled": self.enable_reranking,
                 "reranked": any(
                     "rerank_score" in metadata for _, metadata, _ in results
+                ),
+                "metadata_filtering_enabled": self.enable_metadata_filtering,
+                "metadata_filtered": any(
+                    metadata.get("metadata_filter_applied", False)
+                    for _, metadata, _ in results
                 ),
                 "result_count": len(results),
                 "semantic_result_count": semantic_result_count,

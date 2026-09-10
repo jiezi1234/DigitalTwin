@@ -6,6 +6,7 @@
 import json
 import logging
 import re
+from datetime import date
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Literal
 from src.infrastructure.llm_client import LLMClient
@@ -113,7 +114,9 @@ class QueryProcessor:
             + "\n只输出合法JSON，不要解释，不要输出Markdown代码块。格式为：\n"
             + '{"standalone_query":"...","entities":["..."],'
             + '"time_range":{"start":"...","end":"..."}}\n'
-            + "无法确定时间范围时将time_range设为null；没有实体时entities为空数组。\n"
+            + f"当前日期是{date.today().isoformat()}。仅当问题明确包含时间约束时设置"
+            + "time_range，并将start和end规范化为ISO 8601日期YYYY-MM-DD；"
+            + "无法确定时设为null。没有实体时entities为空数组。\n"
             + f"输入：{json.dumps(payload, ensure_ascii=False)}"
         )
 
@@ -337,13 +340,26 @@ class QueryProcessor:
         Returns:
             处理后的查询
         """
+        return self.process_structured(
+            query=query,
+            persona=persona,
+            conversation=conversation,
+        ).standalone_query
+
+    def process_structured(
+        self,
+        query: str,
+        persona: Optional[Dict[str, Any]] = None,
+        conversation: Optional[List[Dict[str, Any]]] = None,
+    ) -> QueryUnderstanding:
+        """处理查询并保留可供检索层使用的实体与时间约束。"""
         with tracer.start_as_current_span("query.process") as span:
             span.set_attribute("query.original", query[:100])
-
             result = self.understand(
                 query=query,
                 persona=persona,
                 conversation=conversation,
             )
             span.set_attribute("query.processed", result.standalone_query[:100])
-            return result.standalone_query
+            span.set_attribute("query.has_time_range", bool(result.time_range))
+            return result

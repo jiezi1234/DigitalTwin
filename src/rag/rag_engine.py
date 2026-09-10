@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from src.infrastructure.db_client import DBClient
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
+from src.rag.metadata_filter import MetadataFilterBuilder
 from src.rag.query_processor import QueryProcessor
 from src.infrastructure.telemetry import get_tracer
 
@@ -22,6 +23,7 @@ class RAGEngine:
         db_client: DBClient,
         lexical_retriever: Optional[BM25Retriever] = None,
         reranker: Optional[LLMReranker] = None,
+        metadata_filter_builder: Optional[MetadataFilterBuilder] = None,
     ):
         """
         初始化 RAG 引擎
@@ -30,10 +32,12 @@ class RAGEngine:
             db_client: 数据库客户端
             lexical_retriever: 可选的关键词检索器
             reranker: 可选的候选重排器
+            metadata_filter_builder: 可选的结构化元数据过滤器
         """
         self.db_client = db_client
         self.lexical_retriever = lexical_retriever
         self.reranker = reranker
+        self.metadata_filter_builder = metadata_filter_builder
 
     def search(
         self,
@@ -50,6 +54,7 @@ class RAGEngine:
         bm25_weight: float = 1.0,
         rerank: bool = False,
         rerank_candidates: int = 20,
+        metadata_filtering: bool = False,
         **kwargs,
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
@@ -69,6 +74,7 @@ class RAGEngine:
             bm25_weight: BM25 通道权重
             rerank: 是否对首轮召回候选执行相关性重排
             rerank_candidates: 送入重排器的候选数
+            metadata_filtering: 是否应用查询理解产生的元数据约束
             **kwargs: 其他参数（如 persona 等）
 
         Returns:
@@ -88,13 +94,24 @@ class RAGEngine:
             try:
                 # 处理查询
                 processed_query = query
+                understanding = None
                 if query_processor:
-                    processed_query = query_processor.process(
+                    understanding = query_processor.process_structured(
                         query,
                         persona=kwargs.get("persona"),
                         conversation=kwargs.get("conversation"),
                     )
+                    processed_query = understanding.standalone_query
                     span.set_attribute("rag.query_processed", processed_query[:100])
+
+                metadata_filter = None
+                if (
+                    metadata_filtering
+                    and self.metadata_filter_builder is not None
+                    and understanding is not None
+                ):
+                    metadata_filter = self.metadata_filter_builder.build(understanding)
+                span.set_attribute("rag.metadata_filtering", bool(metadata_filter))
 
                 retrieval_limit = (
                     max(k, rerank_candidates) if effective_reranking else k
@@ -102,17 +119,20 @@ class RAGEngine:
                 candidate_count = max(retrieval_limit, hybrid_candidates)
                 dense_error = None
                 try:
-                    dense_results = self.db_client.search(
-                        query=processed_query,
-                        collection_name=collection_name,
-                        k=(
+                    dense_search_kwargs = {
+                        "query": processed_query,
+                        "collection_name": collection_name,
+                        "k": (
                             candidate_count
                             if effective_hybrid_search
                             else retrieval_limit
                         ),
-                        use_mmr=use_mmr,
-                        lambda_mult=lambda_mult,
-                    )
+                        "use_mmr": use_mmr,
+                        "lambda_mult": lambda_mult,
+                    }
+                    if metadata_filter:
+                        dense_search_kwargs["where"] = metadata_filter
+                    dense_results = self.db_client.search(**dense_search_kwargs)
                 except Exception as exc:
                     if not effective_hybrid_search:
                         raise
@@ -122,10 +142,15 @@ class RAGEngine:
 
                 if effective_hybrid_search:
                     try:
+                        bm25_search_kwargs = {
+                            "query": processed_query,
+                            "collection_name": collection_name,
+                            "k": candidate_count,
+                        }
+                        if metadata_filter:
+                            bm25_search_kwargs["where"] = metadata_filter
                         bm25_results = self.lexical_retriever.search(
-                            query=processed_query,
-                            collection_name=collection_name,
-                            k=candidate_count,
+                            **bm25_search_kwargs
                         )
                     except Exception as exc:
                         logger.warning("BM25 检索失败，降级到 Dense/MMR: %s", exc)
@@ -145,6 +170,16 @@ class RAGEngine:
                     span.set_attribute("rag.bm25_results_count", len(bm25_results))
                 else:
                     results = dense_results
+
+                if metadata_filter:
+                    results = [
+                        (
+                            content,
+                            {**metadata, "metadata_filter_applied": True},
+                            score,
+                        )
+                        for content, metadata, score in results
+                    ]
 
                 if effective_reranking:
                     try:

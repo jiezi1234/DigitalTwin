@@ -46,3 +46,25 @@ def test_bm25_retriever_returns_empty_for_unmatched_query():
     db_client.get_records.return_value = [("数据库事务", {}, 1.0)]
 
     assert BM25Retriever(db_client).search("杭州", "persona") == []
+
+
+def test_bm25_retriever_applies_metadata_filter_before_ranking():
+    db_client = MagicMock(spec=DBClient)
+    db_client.get_records.return_value = [
+        ("杭州旅行", {"chat_time": 100}, 1.0),
+        ("杭州工作", {"chat_time": 200}, 1.0),
+    ]
+    retriever = BM25Retriever(db_client)
+
+    results = retriever.search(
+        "杭州",
+        "persona",
+        where={
+            "$and": [
+                {"chat_time": {"$gte": 150}},
+                {"chat_time": {"$lte": 250}},
+            ]
+        },
+    )
+
+    assert [item[0] for item in results] == ["杭州工作"]

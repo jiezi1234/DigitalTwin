@@ -104,6 +104,8 @@ def test_history_aware_understanding_returns_structured_query(mock_llm_client):
     prompt = mock_llm_client.call.call_args.kwargs["messages"][0]["content"]
     assert "我以前说过喜欢杭州吗" in prompt
     assert "那是什么时候" in prompt
+    assert "当前日期" in prompt
+    assert "YYYY-MM-DD" in prompt
     mock_llm_client.call.assert_called_once()
 
 
