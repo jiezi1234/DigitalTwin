@@ -33,3 +33,23 @@ python -m src.cli.evaluate_retrieval \
 毫秒时间戳时，应先全量重新导入聊天数据。
 
 示例文件只说明数据格式，不代表真实实验结果。简历中的指标必须以完整标注集生成的报告为准。
+
+## 回答级评测
+
+复制回答评测示例，并填入系统实际生成的答案及其实际上下文：
+
+```powershell
+Copy-Item evaluation/answer_cases.example.jsonl evaluation/answer_cases.jsonl
+python -m src.cli.evaluate_answers --dataset evaluation/answer_cases.jsonl
+```
+
+每条记录包含 `query`、`contexts`、`answer`、`answerable`，可选
+`expected_contains`。默认报告包含：
+
+- `abstention_accuracy`：可回答问题正常回答、不可回答问题正确拒答的比例。
+- `citation_precision`：回答中的文本引用有多少落在有效上下文编号内。
+- `citation_coverage`：可回答且未拒答的样本中，有多少至少包含一个有效引用。
+- `answer_keyword_recall`：人工标注关键词在答案中的覆盖率。
+
+需要语义级忠实度时显式添加 `--llm-judge`。该模式每个样本增加一次模型调用，
+输出 `groundedness`，适合在小规模人工复核集上运行；不要把未经人工抽检的模型评分直接写进简历。

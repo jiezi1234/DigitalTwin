@@ -4,7 +4,6 @@
 
 import json
 import logging
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.infrastructure.db_client import DBClient
@@ -13,10 +12,9 @@ from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingCl
 from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.rag.query_processor import QueryProcessor
 from src.rag.context_builder import ContextBuilder, ContextBuildResult
+from src.rag.citation_validator import CitationValidation, CitationValidator
 
 logger = logging.getLogger(__name__)
-
-RE_CITE = re.compile(r"\[(\d+)\]")
 
 SearchResult = Tuple[str, Dict[str, Any], float]
 
@@ -36,6 +34,7 @@ class TextbookRAGService:
         mm_client: Optional[MultiModalEmbeddingClient] = None,
         text_embedding_client: Optional[TextEmbeddingClient] = None,
         context_builder: Optional[ContextBuilder] = None,
+        citation_validator: Optional[CitationValidator] = None,
     ):
         self.llm_client = llm_client
         self.db_client = db_client
@@ -47,6 +46,7 @@ class TextbookRAGService:
             TextEmbeddingClient() if ocr_collection_name else None
         )
         self.context_builder = context_builder or ContextBuilder()
+        self.citation_validator = citation_validator or CitationValidator()
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
             enable_coreference_resolution=False,
@@ -274,34 +274,42 @@ class TextbookRAGService:
         reply: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         if reply:
-            cited_indices = set(int(m) for m in RE_CITE.findall(reply))
+            cited_indices = set(self.validate_citations(reply, results).valid_indices)
         else:
             cited_indices = set(range(1, len(results) + 1))
 
-        seen = set()
         sources = []
 
         for i, (_, meta, _) in enumerate(results, 1):
             if i not in cited_indices:
                 continue
 
-            source_file = meta.get("source_file", "")
-            page = meta.get("page", "")
-            key = (source_file, page)
-            if key in seen:
-                continue
-            seen.add(key)
-
             sources.append(
                 {
-                    "source_file": source_file,
+                    "citation_index": i,
+                    "source_file": meta.get("source_file", ""),
                     "chapter": meta.get("chapter", ""),
                     "section": meta.get("section", ""),
-                    "page": page,
+                    "page": meta.get("page", ""),
                 }
             )
 
-            if len(sources) >= 5:
+            if len(sources) >= 8:
                 break
 
         return sources
+
+    def validate_citations(
+        self,
+        reply: Optional[str],
+        results: List[SearchResult],
+    ) -> CitationValidation:
+        """校验文本引用是否指向实际进入模型上下文的片段。"""
+        return self.citation_validator.validate(reply, context_count=len(results))
+
+    @staticmethod
+    def has_evidence(
+        text_results: List[SearchResult], image_results: List[Any]
+    ) -> bool:
+        """判断本轮是否至少包含一个实际可用的文本或图片证据。"""
+        return bool(text_results or image_results)

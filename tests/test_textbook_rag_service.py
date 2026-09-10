@@ -112,3 +112,23 @@ def test_textbook_context_keeps_selected_results_aligned_with_citations():
     assert "[2]" in built.text
     sources = service.get_sources(built.selected_results, reply="参考[2]")
     assert sources[0]["page"] == 3
+    assert sources[0]["citation_index"] == 2
+
+
+def test_textbook_service_validates_citations_against_selected_context():
+    service, _, _, _ = make_service()
+    results = [("内容", {"source_file": "book.pdf", "page": 1}, 0.9)]
+
+    validation = service.validate_citations("正确[1]，错误[3]", results)
+
+    assert validation.valid_indices == [1]
+    assert validation.invalid_indices == [3]
+    assert service.get_sources(results, reply="错误[3]") == []
+
+
+def test_textbook_service_requires_at_least_one_evidence_item():
+    service, _, _, _ = make_service()
+
+    assert service.has_evidence([], []) is False
+    assert service.has_evidence([("文本", {}, 0.9)], []) is True
+    assert service.has_evidence([], [{"image_ref": "图1"}]) is True

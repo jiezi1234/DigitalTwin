@@ -266,6 +266,8 @@ context = service.format_context(results)
 - 使用多模态 Embedding 检索文本块与图片
 - 使用文本 Embedding 检索 OCR collection
 - 使用 RRF 融合两个不可直接比较分数的文本排序
+- 文本与图片均无证据时由 API 直接拒答，不调用生成模型
+- 通过 `CitationValidator` 校验回答中的文本引用是否指向实际上下文
 - 教材格式输出
 
 ```python
@@ -324,7 +326,11 @@ LLMClient (生成回复)
                  ↓
 格式化上下文 + 图片引用
     ↓
-LLMClient (生成讲解)
+证据为空？ ── 是 → 返回可配置的证据不足回复
+    ↓ 否
+LLMClient（生成讲解）
+    ↓
+文本引用编号校验
     ↓
 返回结果
 ```
@@ -342,7 +348,8 @@ LLMClient (生成讲解)
 | `query.coreference_resolution` | 指代消解 |
 | `query.rewriting` | Query Rewriting |
 | `loader.load` | 数据加载 |
-| `format.context` | 上下文格式化 |
+| `context.build` | 上下文去重、预算与截断 |
+| `rerank.llm` | Top-N 候选重排调用 |
 
 ### 配置
 

@@ -188,7 +188,7 @@ function renderMessages() {
     if (m.type === 'file') {
       bub.innerHTML = fileHTML(m);
     } else if (m.role === 'bot' && isTutor && m.text) {
-      bub.innerHTML = mdRender(m.text, m.sources ? m.sources.length : 0);
+      bub.innerHTML = mdRender(m.text, m.sources || []);
       bub.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch {} });
     } else if (m.typing) {
       bub.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
@@ -238,7 +238,8 @@ document.body.appendChild(tooltipEl);
 function formatSource(s) {
   let cChap = (s.chapter || '').split(/[\n•]/)[0].trim();
   if(cChap.length > 60) cChap = cChap.substring(0, 60) + '...';
-  return [s.source_file, cChap, s.page ? 'P' + s.page : ''].filter(Boolean).join(' // ') || '未知来源';
+  const label = s.citation_index ? `[${s.citation_index}] ` : '';
+  return label + ([s.source_file, cChap, s.page ? 'P' + s.page : ''].filter(Boolean).join(' // ') || '未知来源');
 }
 
 window.showRefTooltip = function(e, el, refIdx) {
@@ -254,9 +255,12 @@ window.showRefTooltip = function(e, el, refIdx) {
   const showAll = (refIdx === 'all');
   
   if (!showAll) {
-    const idx = parseInt(refIdx) - 1;
-    if (idx >= 0 && idx < sources.length) {
-      const text = formatSource(sources[idx]);
+    const citationIndex = parseInt(refIdx);
+    const source = sources.find((item, position) =>
+      Number(item.citation_index || position + 1) === citationIndex
+    );
+    if (source) {
+      const text = formatSource(source);
       content += `<div class="ref-tooltip-item" style="color: var(--accent); font-weight: 600;">${text}</div>`;
     } else {
       content += `<div class="ref-tooltip-item">未匹配到对应的文献记录</div>`;
@@ -289,15 +293,18 @@ window.hideRefTooltip = function() {
   }, 100);
 };
 
-function mdRender(text, sourcesLen = 0) {
+function mdRender(text, sources = []) {
   try {
     let html = marked.parse(text);
+    const validCitations = new Set(
+      sources.map((source, position) => Number(source.citation_index || position + 1))
+    );
     html = html.replace(/\[(\d+)\]/g, (match, p1) => {
       const idx = parseInt(p1);
-      if (idx > 0 && idx <= sourcesLen) {
+      if (validCitations.has(idx)) {
         return `<span class="ref-link" data-ref="${idx}" onmouseenter="showRefTooltip(event, this, ${idx})" onmouseleave="hideRefTooltip()">[${idx}]</span>`;
       }
-      return '';
+      return match;
     });
     return html;
   } catch { return text; }
@@ -394,12 +401,12 @@ async function sendTutor(text) {
           const d = JSON.parse(line.slice(6).trim());
           if (d.type === 'token') {
             fullText += d.content;
-            if (bubble) { bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0); chatScroll.scrollTop = chatScroll.scrollHeight; }
+            if (bubble) { bubble.innerHTML = mdRender(fullText, sources || []); chatScroll.scrollTop = chatScroll.scrollHeight; }
           } else if (d.type === 'sources') {
             sources = d.sources;
           } else if (d.error) {
             fullText += '\n\n⚠️ ' + d.error;
-            if (bubble) bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0);
+            if (bubble) bubble.innerHTML = mdRender(fullText, sources || []);
           }
         } catch {}
       }
@@ -407,7 +414,7 @@ async function sendTutor(text) {
 
     if (bubble) {
       bubble.classList.remove('cursor-blink');
-      bubble.innerHTML = mdRender(fullText, sources ? sources.length : 0);
+      bubble.innerHTML = mdRender(fullText, sources || []);
       bubble.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch {} });
     }
 

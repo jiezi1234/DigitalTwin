@@ -597,6 +597,10 @@ RAG_METADATA_FILTERING_ENABLED=true # 启用结构化时间过滤
 RAG_TIMEZONE_OFFSET=+08:00     # 无时区日期使用的 UTC 偏移
 RAG_CONTEXT_RECORD_MAX_CHARS=500 # 单片段字符上限
 RAG_CONTEXT_DEDUP_THRESHOLD=0.90 # 近重复判定阈值
+TUTOR_REQUIRE_EVIDENCE=true    # 无文本和图片证据时直接拒答
+TUTOR_NO_EVIDENCE_RESPONSE=当前教材资料中没有足够信息回答这个问题。
+EVAL_ANSWER_DATASET=./evaluation/answer_cases.jsonl
+EVAL_JUDGE_MODEL=qwen-turbo    # 仅离线忠实度评测使用
 
 # 数据库配置
 CHROMA_PERSIST_DIR=./chroma_db # ChromaDB 持久化目录

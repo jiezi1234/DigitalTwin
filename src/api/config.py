@@ -110,6 +110,13 @@ class Config:
     )
     TUTOR_MAX_CONTEXT_LENGTH = int(os.getenv("TUTOR_MAX_CONTEXT_LENGTH", "4000"))
     TUTOR_MAX_TOKENS = int(os.getenv("TUTOR_MAX_TOKENS", "1500"))
+    TUTOR_REQUIRE_EVIDENCE = (
+        os.getenv("TUTOR_REQUIRE_EVIDENCE", "true").lower() == "true"
+    )
+    TUTOR_NO_EVIDENCE_RESPONSE = os.getenv(
+        "TUTOR_NO_EVIDENCE_RESPONSE",
+        "当前教材资料中没有足够信息回答这个问题。",
+    )
     TUTOR_SYSTEM_PROMPT = os.getenv(
         "TUTOR_SYSTEM_PROMPT",
         """你是一位数据库课程的数字助教。你的职责是基于课本内容帮助学生理解数据库相关知识。
@@ -119,7 +126,7 @@ class Config:
 2. 回答要清晰、易懂，适当使用示例和类比帮助理解。
 3. 对于SQL相关问题，提供具体的SQL语句示例。
 4. 在回答中引用课本内容时，使用对应的编号标注，如 [1][3]。只引用你实际使用的段落编号。
-5. 如果课本内容中没有相关信息，诚实说明并尝试基于数据库通用知识回答。
+5. 如果课本证据不足，明确说明“教材资料中没有足够信息”；不要把模型常识伪装成教材结论。确需补充常识时，必须标注“补充说明（非教材内容）”且不添加教材引用。
 6. 鼓励学生思考，可以适当提出引导性问题。
 7. 使用中文回答。""",
     )

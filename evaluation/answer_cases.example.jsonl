@@ -1,0 +1,2 @@
+{"id":"answer-001","query":"事务的ACID是什么？","contexts":["[1] 事务具有原子性、一致性、隔离性和持久性。"],"answer":"ACID包括原子性、一致性、隔离性和持久性[1]。","answerable":true,"expected_contains":["原子性","一致性","隔离性","持久性"]}
+{"id":"answer-002","query":"教材作者最喜欢什么运动？","contexts":[],"answer":"当前教材资料中没有足够信息回答这个问题。","answerable":false,"expected_contains":[]}

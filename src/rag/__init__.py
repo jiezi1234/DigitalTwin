@@ -4,6 +4,7 @@ from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
 from src.rag.context_builder import ContextBuilder, ContextBuildResult
+from src.rag.citation_validator import CitationValidation, CitationValidator
 
 __all__ = [
     "QueryProcessor",
@@ -15,4 +16,6 @@ __all__ = [
     "MetadataFilterBuilder",
     "ContextBuilder",
     "ContextBuildResult",
+    "CitationValidation",
+    "CitationValidator",
 ]

@@ -16,6 +16,7 @@ from src.services.textbook_rag_service import TextbookRAGService
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
 from src.rag.context_builder import ContextBuilder
+from src.rag.citation_validator import CitationValidator
 
 logger = logging.getLogger(__name__)
 tutor_bp = Blueprint("tutor", __name__)
@@ -28,6 +29,18 @@ tutor_sessions = {}
 
 # 懒加载 TextbookRAGService
 _tutor_rag_service = None
+
+
+def _quality_payload(reply, results, service, evidence_sufficient):
+    validation = (
+        service.validate_citations(reply, results)
+        if service
+        else CitationValidator.validate(reply, context_count=len(results))
+    )
+    return {
+        "evidence_sufficient": evidence_sufficient,
+        "citation_validation": validation.to_dict(),
+    }
 
 
 def _local_image_to_data_url(relative_path: str) -> str:
@@ -148,6 +161,43 @@ def tutor_chat():
         except Exception as e:
             logger.error(f"助教检索异常: {e}")
 
+    evidence_sufficient = (
+        service.has_evidence(results, image_hits) if service else False
+    )
+    if Config.TUTOR_REQUIRE_EVIDENCE and not evidence_sufficient:
+        reply = Config.TUTOR_NO_EVIDENCE_RESPONSE
+        quality = _quality_payload(reply, [], service, False)
+
+        if stream:
+
+            def generate_no_evidence():
+                yield f"data: {json.dumps({'type': 'token', 'content': reply})}\n\n"
+                yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
+                yield f"data: {json.dumps({'type': 'images', 'images': []})}\n\n"
+                yield f"data: {json.dumps({'type': 'quality', **quality})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                messages.append({"role": "assistant", "content": reply})
+                if len(messages) > 40:
+                    tutor_sessions[session_id] = messages[-40:]
+
+            return Response(
+                stream_with_context(generate_no_evidence()),
+                mimetype="text/event-stream",
+            )
+
+        messages.append({"role": "assistant", "content": reply})
+        if len(messages) > 40:
+            tutor_sessions[session_id] = messages[-40:]
+        return jsonify(
+            {
+                "status": "success",
+                "reply": reply,
+                "sources": [],
+                "images": [],
+                "quality": quality,
+            }
+        )
+
     # 构建 Prompt
     system_content = Config.TUTOR_SYSTEM_PROMPT
     if context_text:
@@ -202,8 +252,10 @@ def tutor_chat():
                 if service and results
                 else []
             )
+            quality = _quality_payload(reply_text, results, service, True)
             yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
             yield f"data: {json.dumps({'type': 'images', 'images': image_hits})}\n\n"
+            yield f"data: {json.dumps({'type': 'quality', **quality})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
             if full_reply:
@@ -234,6 +286,7 @@ def tutor_chat():
         sources = (
             service.get_sources(results, reply=reply) if service and results else []
         )
+        quality = _quality_payload(reply, results, service, evidence_sufficient)
 
         # 会话截断
         if len(messages) > 40:
@@ -245,6 +298,7 @@ def tutor_chat():
                 "reply": reply,
                 "sources": sources,
                 "images": image_hits,
+                "quality": quality,
             }
         )
 

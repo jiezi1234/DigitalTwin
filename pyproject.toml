@@ -42,6 +42,7 @@ digitaltwin-export-pdf = "src.cli.export_pdf_assets:main"
 digitaltwin-rebuild-mm-pdf = "src.cli.rebuild_multimodal_pdf_index:main"
 digitaltwin-import-course-materials = "src.cli.import_course_materials:main"
 digitaltwin-evaluate-retrieval = "src.cli.evaluate_retrieval:main"
+digitaltwin-evaluate-answers = "src.cli.evaluate_answers:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
