@@ -11,6 +11,11 @@ from src.evaluation.answer_evaluator import (
     LLMGroundednessJudge,
     load_answer_cases,
 )
+from src.evaluation.evidence_calibrator import (
+    EvidenceCalibrationCase,
+    EvidenceThresholdCalibrator,
+    load_evidence_calibration_cases,
+)
 
 __all__ = [
     "EvaluationCase",
@@ -20,4 +25,7 @@ __all__ = [
     "AnswerEvaluator",
     "LLMGroundednessJudge",
     "load_answer_cases",
+    "EvidenceCalibrationCase",
+    "EvidenceThresholdCalibrator",
+    "load_evidence_calibration_cases",
 ]

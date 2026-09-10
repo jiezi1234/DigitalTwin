@@ -13,6 +13,7 @@ from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.rag.query_processor import QueryProcessor
 from src.rag.context_builder import ContextBuilder, ContextBuildResult
 from src.rag.citation_validator import CitationValidation, CitationValidator
+from src.rag.evidence_policy import EvidenceAssessment, EvidenceConfidencePolicy
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ class TextbookRAGService:
         text_embedding_client: Optional[TextEmbeddingClient] = None,
         context_builder: Optional[ContextBuilder] = None,
         citation_validator: Optional[CitationValidator] = None,
+        evidence_policy: Optional[EvidenceConfidencePolicy] = None,
+        min_text_evidence_score: float = 0.45,
+        min_image_evidence_score: float = 0.45,
+        min_evidence_items: int = 1,
     ):
         self.llm_client = llm_client
         self.db_client = db_client
@@ -47,6 +52,11 @@ class TextbookRAGService:
         )
         self.context_builder = context_builder or ContextBuilder()
         self.citation_validator = citation_validator or CitationValidator()
+        self.evidence_policy = evidence_policy or EvidenceConfidencePolicy(
+            min_text_score=min_text_evidence_score,
+            min_image_score=min_image_evidence_score,
+            min_items=min_evidence_items,
+        )
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
             enable_coreference_resolution=False,
@@ -307,9 +317,14 @@ class TextbookRAGService:
         """校验文本引用是否指向实际进入模型上下文的片段。"""
         return self.citation_validator.validate(reply, context_count=len(results))
 
-    @staticmethod
+    def assess_evidence(
+        self, text_results: List[SearchResult], image_results: List[Any]
+    ) -> EvidenceAssessment:
+        """根据各检索通道的原始相似度评估证据是否足以支撑回答。"""
+        return self.evidence_policy.assess(text_results, image_results)
+
     def has_evidence(
-        text_results: List[SearchResult], image_results: List[Any]
+        self, text_results: List[SearchResult], image_results: List[Any]
     ) -> bool:
-        """判断本轮是否至少包含一个实际可用的文本或图片证据。"""
-        return bool(text_results or image_results)
+        """兼容布尔接口；新代码应优先使用 ``assess_evidence``。"""
+        return self.assess_evidence(text_results, image_results).sufficient

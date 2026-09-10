@@ -5,6 +5,7 @@ from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
 from src.rag.context_builder import ContextBuilder, ContextBuildResult
 from src.rag.citation_validator import CitationValidation, CitationValidator
+from src.rag.evidence_policy import EvidenceAssessment, EvidenceConfidencePolicy
 
 __all__ = [
     "QueryProcessor",
@@ -18,4 +19,6 @@ __all__ = [
     "ContextBuildResult",
     "CitationValidation",
     "CitationValidator",
+    "EvidenceAssessment",
+    "EvidenceConfidencePolicy",
 ]

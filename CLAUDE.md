@@ -16,7 +16,8 @@
 - 混合召回后使用一次结构化 LLM 调用重排 Top-N 候选，失败时保留原排名
 - 查询理解产生的 ISO 时间范围通过统一过滤器下推到 Dense/MMR 与 BM25
 - 生成前统一执行上下文近重复去除、单片段限长与整体字符预算，教材引用只映射实际入选片段
-- 教材链路无证据时直接拒答，并对生成答案执行确定性引用编号校验；LLM 忠实度判断仅用于离线评测
+- 教材链路通过可注入的证据置信度策略分别检查文本与图片得分、最少有效证据数；未达阈值时直接拒答，并支持用正例和困难负例离线校准阈值
+- 对生成答案执行确定性引用编号校验；LLM 忠实度判断仅用于离线评测
 - 人物检索围绕语义命中消息按 conversation_id/message_index 扩展时间邻域并去重
 - 分层架构：Infrastructure → Loaders → RAG Engine → Services → API
 
@@ -50,6 +51,9 @@ python -m src.cli.evaluate_retrieval --dataset evaluation/retrieval_queries.json
 
 # 运行教材回答级引用、拒答与可选忠实度评测
 python -m src.cli.evaluate_answers --dataset evaluation/answer_cases.jsonl
+
+# 使用正例与困难负例校准教材文本/图片证据阈值
+python -m src.cli.calibrate_evidence --dataset evaluation/evidence_calibration.jsonl
 
 # 监控栈（Prometheus + Loki + Grafana）
 bash scripts/start_monitoring.sh
@@ -86,6 +90,7 @@ DigitalTwin-Refactor/
 │   │   ├── metadata_filter.py          # 查询时间范围到 Chroma 条件的转换
 │   │   ├── context_builder.py          # 上下文去重、预算、截断与入选统计
 │   │   ├── citation_validator.py       # 教材回答文本引用的有效性校验
+│   │   ├── evidence_policy.py          # 文本/图片证据置信度门禁
 │   │   ├── query_processor.py        # 历史感知查询理解（改写 / 指代消解）
 │   │   └── react_router.py           # ReAct 检索工具路由
 │   ├── services/                  # 业务服务层

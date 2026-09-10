@@ -53,3 +53,20 @@ python -m src.cli.evaluate_answers --dataset evaluation/answer_cases.jsonl
 
 需要语义级忠实度时显式添加 `--llm-judge`。该模式每个样本增加一次模型调用，
 输出 `groundedness`，适合在小规模人工复核集上运行；不要把未经人工抽检的模型评分直接写进简历。
+
+## 证据阈值校准
+
+证据门禁的目标不是判断“有没有返回结果”，而是判断最高相关结果是否足以支撑回答。每条 JSONL 记录标注一个文本或图片检索结果：
+
+```json
+{"id":"text-hard-negative-1","modality":"text","score":0.63,"sufficient":false,"category":"same_topic_wrong_fact"}
+```
+
+`score` 使用线上门禁所见的 0 到 1 相似度，`sufficient` 由人工判断该证据能否支撑查询。负例应包含同主题错误事实、相邻但不回答问题的段落和视觉相似错误页面，而不应只有随机无关内容。
+
+```powershell
+Copy-Item evaluation/evidence_calibration.example.jsonl evaluation/evidence_calibration.jsonl
+python -m src.cli.calibrate_evidence --dataset evaluation/evidence_calibration.jsonl
+```
+
+校准器按文本与图片分别选择 F1 最高的阈值；F1 并列时优先降低误放行率。报告中的建议值需经过独立验证集和人工错误分析，再写入 `.env`。示例数据只展示格式，不能作为简历指标。

@@ -1,0 +1,8 @@
+{"id":"text-positive-1","modality":"text","score":0.86,"sufficient":true,"category":"direct_answer"}
+{"id":"text-positive-2","modality":"text","score":0.72,"sufficient":true,"category":"paraphrase"}
+{"id":"text-hard-negative-1","modality":"text","score":0.63,"sufficient":false,"category":"same_topic_wrong_fact"}
+{"id":"text-negative-2","modality":"text","score":0.28,"sufficient":false,"category":"unrelated"}
+{"id":"image-positive-1","modality":"image","score":0.82,"sufficient":true,"category":"diagram_answers_query"}
+{"id":"image-positive-2","modality":"image","score":0.68,"sufficient":true,"category":"table_answers_query"}
+{"id":"image-hard-negative-1","modality":"image","score":0.57,"sufficient":false,"category":"visually_similar_wrong_page"}
+{"id":"image-negative-2","modality":"image","score":0.21,"sufficient":false,"category":"unrelated"}

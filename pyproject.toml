@@ -43,6 +43,7 @@ digitaltwin-rebuild-mm-pdf = "src.cli.rebuild_multimodal_pdf_index:main"
 digitaltwin-import-course-materials = "src.cli.import_course_materials:main"
 digitaltwin-evaluate-retrieval = "src.cli.evaluate_retrieval:main"
 digitaltwin-evaluate-answers = "src.cli.evaluate_answers:main"
+digitaltwin-calibrate-evidence = "src.cli.calibrate_evidence:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

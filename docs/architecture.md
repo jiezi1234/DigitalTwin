@@ -266,7 +266,7 @@ context = service.format_context(results)
 - 使用多模态 Embedding 检索文本块与图片
 - 使用文本 Embedding 检索 OCR collection
 - 使用 RRF 融合两个不可直接比较分数的文本排序
-- 文本与图片均无证据时由 API 直接拒答，不调用生成模型
+- 通过独立 `EvidenceConfidencePolicy` 按文本/图片原始相似度和最少证据数执行回答门禁，低置信度命中也会拒答
 - 通过 `CitationValidator` 校验回答中的文本引用是否指向实际上下文
 - 教材格式输出
 
@@ -326,7 +326,7 @@ LLMClient (生成回复)
                  ↓
 格式化上下文 + 图片引用
     ↓
-证据为空？ ── 是 → 返回可配置的证据不足回复
+证据置信度达标？ ── 否 → 返回可配置的证据不足回复
     ↓ 否
 LLMClient（生成讲解）
     ↓
@@ -419,6 +419,7 @@ client = LLMClient(
 - **组件集成测试**: 使用 Mock 隔离外部服务，验证加载、查询处理、检索与上下文格式化的协作流程 (`integration_tests.py`)
 - **覆盖率**: 当前作为持续改进指标记录，待补齐 API、导入脚本和 PDF 流程测试后再设置门禁
 - **检索评测**: 使用脱敏 JSONL 标注集对比 baseline similarity 与 Query Rewriting + MMR，记录 Hit Rate@K、MRR@K、Recall@K 和延迟分位数
+- **证据校准**: 使用人工标注正例与困难负例，分别选择文本和图片阈值，记录 Precision、Recall、F1 与误放行率
 
 运行测试：
 ```bash

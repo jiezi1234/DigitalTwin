@@ -117,6 +117,13 @@ class Config:
         "TUTOR_NO_EVIDENCE_RESPONSE",
         "当前教材资料中没有足够信息回答这个问题。",
     )
+    TUTOR_MIN_TEXT_EVIDENCE_SCORE = float(
+        os.getenv("TUTOR_MIN_TEXT_EVIDENCE_SCORE", "0.45")
+    )
+    TUTOR_MIN_IMAGE_EVIDENCE_SCORE = float(
+        os.getenv("TUTOR_MIN_IMAGE_EVIDENCE_SCORE", "0.45")
+    )
+    TUTOR_MIN_EVIDENCE_ITEMS = int(os.getenv("TUTOR_MIN_EVIDENCE_ITEMS", "1"))
     TUTOR_SYSTEM_PROMPT = os.getenv(
         "TUTOR_SYSTEM_PROMPT",
         """你是一位数据库课程的数字助教。你的职责是基于课本内容帮助学生理解数据库相关知识。

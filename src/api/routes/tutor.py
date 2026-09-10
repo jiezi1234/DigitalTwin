@@ -17,6 +17,7 @@ from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingCl
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
 from src.rag.context_builder import ContextBuilder
 from src.rag.citation_validator import CitationValidator
+from src.rag.evidence_policy import EvidenceAssessment, EvidenceConfidencePolicy
 
 logger = logging.getLogger(__name__)
 tutor_bp = Blueprint("tutor", __name__)
@@ -31,16 +32,25 @@ tutor_sessions = {}
 _tutor_rag_service = None
 
 
-def _quality_payload(reply, results, service, evidence_sufficient):
+def _quality_payload(reply, results, service, evidence_assessment):
     validation = (
         service.validate_citations(reply, results)
         if service
         else CitationValidator.validate(reply, context_count=len(results))
     )
     return {
-        "evidence_sufficient": evidence_sufficient,
+        "evidence_sufficient": evidence_assessment.sufficient,
+        "evidence": evidence_assessment.to_dict(),
         "citation_validation": validation.to_dict(),
     }
+
+
+def _empty_evidence_assessment() -> EvidenceAssessment:
+    return EvidenceConfidencePolicy(
+        min_text_score=Config.TUTOR_MIN_TEXT_EVIDENCE_SCORE,
+        min_image_score=Config.TUTOR_MIN_IMAGE_EVIDENCE_SCORE,
+        min_items=Config.TUTOR_MIN_EVIDENCE_ITEMS,
+    ).assess([], [])
 
 
 def _local_image_to_data_url(relative_path: str) -> str:
@@ -98,6 +108,9 @@ def get_tutor_service():
                     max_record_chars=Config.RAG_CONTEXT_RECORD_MAX_CHARS,
                     dedup_threshold=Config.RAG_CONTEXT_DEDUP_THRESHOLD,
                 ),
+                min_text_evidence_score=Config.TUTOR_MIN_TEXT_EVIDENCE_SCORE,
+                min_image_evidence_score=Config.TUTOR_MIN_IMAGE_EVIDENCE_SCORE,
+                min_evidence_items=Config.TUTOR_MIN_EVIDENCE_ITEMS,
             )
         except Exception as e:
             logger.warning(f"助教服务初始化失败 (可能未导入课本): {e}")
@@ -161,12 +174,15 @@ def tutor_chat():
         except Exception as e:
             logger.error(f"助教检索异常: {e}")
 
-    evidence_sufficient = (
-        service.has_evidence(results, image_hits) if service else False
+    evidence_assessment = (
+        service.assess_evidence(results, image_hits)
+        if service
+        else _empty_evidence_assessment()
     )
+    evidence_sufficient = evidence_assessment.sufficient
     if Config.TUTOR_REQUIRE_EVIDENCE and not evidence_sufficient:
         reply = Config.TUTOR_NO_EVIDENCE_RESPONSE
-        quality = _quality_payload(reply, [], service, False)
+        quality = _quality_payload(reply, [], service, evidence_assessment)
 
         if stream:
 
@@ -252,7 +268,9 @@ def tutor_chat():
                 if service and results
                 else []
             )
-            quality = _quality_payload(reply_text, results, service, True)
+            quality = _quality_payload(
+                reply_text, results, service, evidence_assessment
+            )
             yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
             yield f"data: {json.dumps({'type': 'images', 'images': image_hits})}\n\n"
             yield f"data: {json.dumps({'type': 'quality', **quality})}\n\n"
@@ -286,7 +304,7 @@ def tutor_chat():
         sources = (
             service.get_sources(results, reply=reply) if service and results else []
         )
-        quality = _quality_payload(reply, results, service, evidence_sufficient)
+        quality = _quality_payload(reply, results, service, evidence_assessment)
 
         # 会话截断
         if len(messages) > 40:

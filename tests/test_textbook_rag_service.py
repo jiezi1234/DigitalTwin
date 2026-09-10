@@ -131,4 +131,5 @@ def test_textbook_service_requires_at_least_one_evidence_item():
 
     assert service.has_evidence([], []) is False
     assert service.has_evidence([("文本", {}, 0.9)], []) is True
-    assert service.has_evidence([], [{"image_ref": "图1"}]) is True
+    assert service.has_evidence([], [{"image_ref": "图1", "score": 0.9}]) is True
+    assert service.has_evidence([("低相关文本", {}, 0.2)], []) is False

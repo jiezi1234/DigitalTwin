@@ -535,6 +535,8 @@ class RAGService:
         """获取集合统计信息"""
 ```
 
+`TextbookRAGService.assess_evidence(text_results, image_results)` 返回结构化证据判断，包含 `sufficient`、文本/图片最高分、达到阈值的证据数量和 `reason`。`/api/tutor/chat` 的 `quality.evidence` 返回同一结构；`reason` 可能为 `sufficient`、`no_evidence`、`below_threshold` 或 `insufficient_items`。
+
 ### TextbookRAGService
 
 ```python
@@ -599,8 +601,12 @@ RAG_CONTEXT_RECORD_MAX_CHARS=500 # 单片段字符上限
 RAG_CONTEXT_DEDUP_THRESHOLD=0.90 # 近重复判定阈值
 TUTOR_REQUIRE_EVIDENCE=true    # 无文本和图片证据时直接拒答
 TUTOR_NO_EVIDENCE_RESPONSE=当前教材资料中没有足够信息回答这个问题。
+TUTOR_MIN_TEXT_EVIDENCE_SCORE=0.45  # 文本证据阈值，需用标注集校准
+TUTOR_MIN_IMAGE_EVIDENCE_SCORE=0.45 # 图片证据阈值，需用标注集校准
+TUTOR_MIN_EVIDENCE_ITEMS=1          # 至少达到阈值的证据数量
 EVAL_ANSWER_DATASET=./evaluation/answer_cases.jsonl
 EVAL_JUDGE_MODEL=qwen-turbo    # 仅离线忠实度评测使用
+EVAL_EVIDENCE_DATASET=./evaluation/evidence_calibration.jsonl
 
 # 数据库配置
 CHROMA_PERSIST_DIR=./chroma_db # ChromaDB 持久化目录
