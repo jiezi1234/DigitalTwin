@@ -1,7 +1,7 @@
 """
 重建 PDF 多模态索引
 使用方式:
-python -m src.rebuild_multimodal_pdf_index "data/pdf/*.pdf"
+python -m src.cli.rebuild_multimodal_pdf_index "data/pdf/*.pdf"
 """
 
 import argparse

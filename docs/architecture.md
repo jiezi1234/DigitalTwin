@@ -114,7 +114,7 @@ class DataLoaderFactory:
 
 #### 2.3 PDF 加载器 (`pdf_loader.py`)
 
-用于加载教材和文档。基于 PyPDF2。
+用于加载教材和文档。基于 PyMuPDF，支持原生文本提取、OCR 与图片导出。
 
 **特性：**
 - 逐页提取文本
@@ -127,36 +127,45 @@ class DataLoaderFactory:
 
 #### 3.1 QueryProcessor (`query_processor.py`)
 
-查询处理器，支持多种处理策略。
+查询处理器结合最近会话，用一次结构化模型调用生成可独立检索的问题，避免指代消解与查询改写串行调用造成额外延迟和语义漂移。
 
-**策略：**
+**输出：**
 
-1. **指代消解 (Coreference Resolution)**
-   - 将代词（他、她、它）替换为具体人名
-   - 通过 LLM 进行消解
-
-2. **Query Rewriting**
-   - 根据分身特点改写查询
-   - 将简短或模糊的查询扩展为更有语义的形式
-   - 提高向量检索质量
+- `standalone_query`：结合最近会话消解指代后的独立检索查询
+- `entities`：问题中的人物、地点、课程术语等实体
+- `time_range`：可识别的时间范围，为后续元数据过滤预留
+- 结构化响应无法解析或模型调用失败时回退到原查询
 
 **使用示例：**
 ```python
 processor = QueryProcessor(
     llm_client=client,
     enable_coreference_resolution=True,
-    enable_query_rewriting=True
+    enable_query_rewriting=True,
+    history_messages=6,
 )
 
 processed_query = processor.process(
-    query="他最近怎么样",
-    persona={"name": "张三"}
+    query="那是什么时候？",
+    persona={"name": "张三"},
+    conversation=[
+        {"role": "user", "content": "我以前说过喜欢杭州吗？"},
+        {"role": "assistant", "content": "你提到过杭州。"},
+    ],
 )
 ```
 
 #### 3.2 RAGEngine (`rag_engine.py`)
 
 核心的 RAG 搜索引擎，统一了聊天和教材搜索的逻辑。
+
+人物检索由可组合的 `BM25Retriever` 提供关键词通道。它对中文生成单字和二元
+词片段，对英文与数字按词切分，并按 collection 懒加载缓存原文索引。
+RAGEngine 将 Dense/MMR 与 BM25 的候选排名通过加权 RRF 融合，避免直接比较
+不同通道的原始分数；任一通道异常时自动降级到另一通道。
+可组合的 `LLMReranker` 随后用一次结构化调用对 Top-N 候选做相关性评分，
+再截取最终 Top-K。候选内容以不可信 JSON 数据传入；模型失败、输出缺失或
+解析异常时保持 RRF 原排名，避免重排服务成为单点故障。
 
 **核心方法：**
 
@@ -168,7 +177,12 @@ processed_query = processor.process(
        query_processor=processor,
        k=15,
        use_mmr=True,
-       lambda_mult=0.6
+       lambda_mult=0.6,
+       hybrid_search=True,
+       hybrid_candidates=30,
+       rrf_k=60,
+       rerank=True,
+       rerank_candidates=20,
    )
    # 返回 List[Tuple[content, metadata, score]]
    ```
@@ -189,8 +203,18 @@ processed_query = processor.process(
        format_type="textbook"
    )
    # 【第一章 > 第一节 > 第1页】
-   # 内容...
-   ```
+    # 内容...
+    ```
+
+3. **expand_chat_neighbors()**
+   - 围绕前几个语义命中点读取同一 `conversation_id` 的前后消息
+   - 使用 `message_index` 恢复对话顺序，并对重叠邻域去重
+   - 旧索引缺少邻域元数据时保留原语义结果
+
+#### 3.3 ReActRetrievalRouter (`react_router.py`)
+
+将 `retrieval_search` 作为代理可选工具。路由模型结合当前问题和最近会话，
+只输出 `retrieve` 或 `respond` 动作；无法解析时默认检索。系统不保存或返回模型的推理过程。
 
 ### 4. 服务层 (`src/services/`)
 
@@ -201,6 +225,7 @@ processed_query = processor.process(
 分身 RAG 服务，负责聊天记录的搜索和检索。
 
 **特性：**
+- 通过 ReAct 路由按需调用检索工具
 - 启用指代消解
 - 启用 Query Rewriting
 - 聊天格式输出
@@ -225,14 +250,19 @@ context = service.format_context(results)
 
 **特性：**
 - 禁用指代消解（教材中不需要）
-- 启用 Query Rewriting
+- 使用教材领域专用 Query Rewriting
+- 使用多模态 Embedding 检索文本块与图片
+- 使用文本 Embedding 检索 OCR collection
+- 使用 RRF 融合两个不可直接比较分数的文本排序
 - 教材格式输出
 
 ```python
 service = TextbookRAGService(
     llm_client=client,
     db_client=db_client,
-    collection_name="textbook_embeddings"
+    text_collection_name="textbook_mm_text_embeddings",
+    image_collection_name="textbook_mm_image_embeddings",
+    ocr_collection_name="textbook_ocr_text_embeddings",
 )
 
 results = service.search(query="什么是基础概念")
@@ -246,13 +276,19 @@ context = service.format_context(results)
 ```
 用户查询
     ↓
-QueryProcessor (指代消解 + Query Rewriting)
+ReActRetrievalRouter (retrieve / respond)
+    ↓ retrieve                 ↓ respond
+历史感知 QueryProcessor       跳过向量检索
     ↓
-RAGEngine (向量搜索 MMR)
+Dense/MMR + BM25
     ↓
-DBClient (ChromaDB 搜索)
+加权 RRF 排名融合
     ↓
-RAGEngine (格式化上下文)
+LLM Top-N 候选重排
+    ↓
+时间邻域扩展（同一会话的前后消息）
+    ↓
+格式化检索上下文
     ↓
 LLMClient (生成回复)
     ↓
@@ -264,13 +300,15 @@ LLMClient (生成回复)
 ```
 用户查询
     ↓
-QueryProcessor (Query Rewriting)
+历史感知 QueryProcessor
     ↓
-RAGEngine (向量搜索 MMR)
-    ↓
-DBClient (ChromaDB 搜索)
-    ↓
-RAGEngine (格式化上下文 - 教材格式)
+多模态查询向量              文本查询向量
+    ↓                           ↓
+文本块 + 图片检索             OCR 文本检索
+    ↓                           ↓
+        RRF 文本排序融合
+                 ↓
+格式化上下文 + 图片引用
     ↓
 LLMClient (生成讲解)
     ↓
@@ -357,8 +395,9 @@ client = LLMClient(
 ## 测试策略
 
 - **单元测试**: 各层独立测试 (test_*.py)
-- **集成测试**: 端到端流程测试 (integration_tests.py)
-- **覆盖率**: 目标 > 80%
+- **组件集成测试**: 使用 Mock 隔离外部服务，验证加载、查询处理、检索与上下文格式化的协作流程 (`integration_tests.py`)
+- **覆盖率**: 当前作为持续改进指标记录，待补齐 API、导入脚本和 PDF 流程测试后再设置门禁
+- **检索评测**: 使用脱敏 JSONL 标注集对比 baseline similarity 与 Query Rewriting + MMR，记录 Hit Rate@K、MRR@K、Recall@K 和延迟分位数
 
 运行测试：
 ```bash

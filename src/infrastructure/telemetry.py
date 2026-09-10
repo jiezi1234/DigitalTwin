@@ -40,16 +40,22 @@ _singleton_lock = threading.Lock()
 _LIGHT_SPANS = {
     "llm.api_call",
     "db.vector_search",
+    "bm25.search",
     "loader.load",
 }
 
 # 完整追踪包括中间步骤
 _FULL_SPANS = _LIGHT_SPANS | {
     "rag.search",
+    "rag.expand_chat_neighbors",
+    "rerank.llm",
     "query.process",
+    "query.understand",
     "query.coreference_resolution",
     "query.rewriting",
+    "react.route",
     "db.connect",
+    "db.metadata_get",
     "format.context",
 }
 

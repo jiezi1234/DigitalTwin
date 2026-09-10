@@ -295,12 +295,16 @@ class QueryProcessor:
         llm_client: LLMClient,
         enable_coreference_resolution: bool = True,
         enable_query_rewriting: bool = True,
+        domain: Literal["persona", "textbook"] = "persona",
+        history_messages: int = 6,
     ):
         """
         Args:
             llm_client: LLM 客户端
             enable_coreference_resolution: 启用指代消解
             enable_query_rewriting: 启用 Query Rewriting
+            domain: 查询所属领域
+            history_messages: 查询理解读取的最近会话消息数
         """
 
     def resolve_coreference(
@@ -339,13 +343,15 @@ class QueryProcessor:
         self,
         query: str,
         persona: Optional[Dict[str, Any]] = None,
+        conversation: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
-        完整的查询处理流程（先消解，再改写）
+        结合最近会话，用一次结构化调用完成指代消解与查询改写
 
         Args:
             query: 原始查询
             persona: 分身信息
+            conversation: 最近会话历史
 
         Returns:
             处理后的查询
@@ -360,10 +366,17 @@ from src.rag.rag_engine import RAGEngine
 class RAGEngine:
     """RAG 核心搜索引擎"""
 
-    def __init__(self, db_client: DBClient):
+    def __init__(
+        self,
+        db_client: DBClient,
+        lexical_retriever: Optional[BM25Retriever] = None,
+        reranker: Optional[LLMReranker] = None,
+    ):
         """
         Args:
             db_client: 数据库客户端
+            lexical_retriever: 可选的 BM25 关键词检索器
+            reranker: 可选的 LLM 候选重排器
         """
 
     def search(
@@ -374,6 +387,13 @@ class RAGEngine:
         k: int = 15,
         use_mmr: bool = True,
         lambda_mult: float = 0.6,
+        hybrid_search: bool = False,
+        hybrid_candidates: int = 30,
+        rrf_k: int = 60,
+        dense_weight: float = 1.0,
+        bm25_weight: float = 1.0,
+        rerank: bool = False,
+        rerank_candidates: int = 20,
         **kwargs,
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """
@@ -386,6 +406,13 @@ class RAGEngine:
             k: 返回结果数
             use_mmr: 是否使用 MMR
             lambda_mult: MMR 多样性权重
+            hybrid_search: 是否启用 Dense/MMR + BM25 混合召回
+            hybrid_candidates: 每个通道参与融合的候选数
+            rrf_k: RRF 排名平滑常数
+            dense_weight: Dense/MMR 通道权重
+            bm25_weight: BM25 通道权重
+            rerank: 是否执行候选相关性重排
+            rerank_candidates: 送入重排器的候选数
             **kwargs: 其他参数（如 persona）
 
         Returns:
@@ -440,6 +467,11 @@ class RAGService:
         collection_name: str = "wechat_embeddings",
         enable_coreference_resolution: bool = True,
         enable_query_rewriting: bool = True,
+        enable_hybrid_search: bool = False,
+        enable_reranking: bool = False,
+        rerank_model: str = "qwen-turbo",
+        rerank_candidates: int = 20,
+        react_router: Optional[ReActRetrievalRouter] = None,
     ):
         """
         初始化 RAG 服务
@@ -450,6 +482,11 @@ class RAGService:
             collection_name: 向量集合名称
             enable_coreference_resolution: 启用指代消解
             enable_query_rewriting: 启用 Query Rewriting
+            enable_hybrid_search: 启用 Dense/MMR + BM25 混合召回
+            enable_reranking: 启用 LLM 候选重排
+            rerank_model: 重排模型
+            rerank_candidates: 单次重排候选数
+            react_router: 可选的 ReAct 检索工具路由器
         """
 
     def search(
@@ -496,7 +533,9 @@ class TextbookRAGService:
         self,
         llm_client: LLMClient,
         db_client: DBClient,
-        collection_name: str = "textbook_embeddings",
+        text_collection_name: str = "textbook_mm_text_embeddings",
+        image_collection_name: str = "textbook_mm_image_embeddings",
+        ocr_collection_name: Optional[str] = None,
         enable_query_rewriting: bool = True,
     ):
         """
@@ -505,13 +544,14 @@ class TextbookRAGService:
         注意：教材服务默认禁用指代消解（教材中不需要）
         """
 
-    def search(
+    def retrieve(
         self,
         query: str,
-        k: int = 15,
-        lambda_mult: float = 0.6,
-    ) -> List[Tuple[str, Dict[str, Any], float]]:
-        """搜索相关教材内容"""
+        text_k: int = 8,
+        image_k: int = 4,
+        ocr_k: int = 8,
+    ) -> Dict[str, Any]:
+        """检索多模态文本、OCR 文本和图片，并使用 RRF 融合文本结果。"""
 
     def format_context(
         self,
@@ -536,9 +576,12 @@ OTEL_TRACE_LEVEL=full          # light, full, custom
 DASHSCOPE_API_KEY=sk-xxx       # DashScope API 密钥
 LLM_API_BASE=https://...       # API 基础地址
 LLM_REWRITING_MODEL=qwen-plus  # 默认模型
+RAG_RERANK_ENABLED=true        # 启用候选重排
+RAG_RERANK_MODEL=qwen-turbo    # 重排模型
+RAG_RERANK_CANDIDATES=20       # 单次重排候选数
 
 # 数据库配置
-CHROMADB_PATH=./chroma_db      # ChromaDB 持久化目录
+CHROMA_PERSIST_DIR=./chroma_db # ChromaDB 持久化目录
 ```
 
 ## 常见用法

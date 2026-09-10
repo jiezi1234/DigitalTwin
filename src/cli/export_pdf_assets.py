@@ -1,7 +1,7 @@
 """
 PDF 结构化导出脚本
 使用方式:
-python -m src.export_pdf_assets data/pdf/notes1_2022.pdf --output-dir output/pdf_export
+python -m src.cli.export_pdf_assets data/pdf/notes1_2022.pdf --output-dir output/pdf_export
 """
 
 import argparse

@@ -10,4 +10,4 @@ export TUTOR_MM_IMAGE_COLLECTION="textbook_mm_image_embeddings"
 export TUTOR_OCR_TEXT_COLLECTION="textbook_ocr_text_embeddings"
 export TUTOR_VL_MODEL="qwen-vl-plus"
 
-python -m src.run_server
+python -m src.cli.run_server

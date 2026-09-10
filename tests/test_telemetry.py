@@ -1,6 +1,22 @@
 import os
+from contextlib import contextmanager
 from unittest.mock import patch
 from src.infrastructure.telemetry import TelemetryManager, get_tracer
+
+
+@contextmanager
+def telemetry_manager(**environment):
+    """Create an isolated manager without starting network exporters."""
+    with (
+        patch.dict(os.environ, environment),
+        patch("src.infrastructure.telemetry._OTLP_HTTP_AVAILABLE", False),
+        patch("src.infrastructure.telemetry._PROMETHEUS_AVAILABLE", False),
+    ):
+        manager = TelemetryManager()
+        try:
+            yield manager
+        finally:
+            manager.shutdown()
 
 
 def test_telemetry_disabled_by_default():
@@ -12,8 +28,7 @@ def test_telemetry_disabled_by_default():
 
 def test_telemetry_enabled():
     """启用时应该正确初始化"""
-    with patch.dict(os.environ, {"OTEL_ENABLED": "true", "OTEL_TRACE_LEVEL": "light"}):
-        manager = TelemetryManager()
+    with telemetry_manager(OTEL_ENABLED="true", OTEL_TRACE_LEVEL="light") as manager:
         assert manager.enabled is True
         assert manager.trace_level == "light"
 
@@ -30,15 +45,13 @@ def test_get_tracer_returns_valid_tracer():
 def test_tracer_filtering_by_level():
     """不同的追踪级别应该过滤不同的 span"""
     # Test light level
-    with patch.dict(os.environ, {"OTEL_ENABLED": "true", "OTEL_TRACE_LEVEL": "light"}):
-        manager = TelemetryManager()
+    with telemetry_manager(OTEL_ENABLED="true", OTEL_TRACE_LEVEL="light") as manager:
         assert manager.should_trace("llm.api_call") is True
         assert manager.should_trace("db.vector_search") is True
         assert manager.should_trace("rag.search") is False  # Not in light level
 
     # Test full level
-    with patch.dict(os.environ, {"OTEL_ENABLED": "true", "OTEL_TRACE_LEVEL": "full"}):
-        manager = TelemetryManager()
+    with telemetry_manager(OTEL_ENABLED="true", OTEL_TRACE_LEVEL="full") as manager:
         assert manager.should_trace("llm.api_call") is True
         assert manager.should_trace("rag.search") is True  # In full level
         assert manager.should_trace("unknown.span") is False
@@ -46,12 +59,11 @@ def test_tracer_filtering_by_level():
 
 def test_tracer_filtering_custom_patterns():
     """自定义追踪模式"""
-    with patch.dict(os.environ, {
-        "OTEL_ENABLED": "true",
-        "OTEL_TRACE_LEVEL": "custom",
-        "OTEL_CUSTOM_SPAN_PATTERNS": "llm.api_call,db.vector_search"
-    }):
-        manager = TelemetryManager()
+    with telemetry_manager(
+        OTEL_ENABLED="true",
+        OTEL_TRACE_LEVEL="custom",
+        OTEL_CUSTOM_SPAN_PATTERNS="llm.api_call,db.vector_search",
+    ) as manager:
         assert manager.should_trace("llm.api_call") is True
         assert manager.should_trace("db.vector_search") is True
         assert manager.should_trace("rag.search") is False
@@ -59,7 +71,6 @@ def test_tracer_filtering_custom_patterns():
 
 def test_telemetry_shutdown():
     """测试关闭功能"""
-    with patch.dict(os.environ, {"OTEL_ENABLED": "true"}):
-        manager = TelemetryManager()
+    with telemetry_manager(OTEL_ENABLED="true") as manager:
         # Should not raise any exceptions
         manager.shutdown()

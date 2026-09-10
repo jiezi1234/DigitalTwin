@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.infrastructure.db_client import DBClient
 from src.infrastructure.llm_client import LLMClient
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
+from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.rag.query_processor import QueryProcessor
 
 logger = logging.getLogger(__name__)
@@ -28,18 +29,28 @@ class TextbookRAGService:
         db_client: DBClient,
         text_collection_name: str = "textbook_mm_text_embeddings",
         image_collection_name: str = "textbook_mm_image_embeddings",
+        ocr_collection_name: Optional[str] = None,
         enable_query_rewriting: bool = True,
+        query_history_messages: int = 6,
         mm_client: Optional[MultiModalEmbeddingClient] = None,
+        text_embedding_client: Optional[TextEmbeddingClient] = None,
     ):
         self.llm_client = llm_client
         self.db_client = db_client
         self.text_collection_name = text_collection_name
         self.image_collection_name = image_collection_name
+        self.ocr_collection_name = ocr_collection_name
         self.mm_client = mm_client or MultiModalEmbeddingClient()
+        self.text_embedding_client = (
+            text_embedding_client
+            or (TextEmbeddingClient() if ocr_collection_name else None)
+        )
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
             enable_coreference_resolution=False,
             enable_query_rewriting=enable_query_rewriting,
+            domain="textbook",
+            history_messages=query_history_messages,
         )
 
     def retrieve(
@@ -47,11 +58,16 @@ class TextbookRAGService:
         query: str,
         text_k: int = 8,
         image_k: int = 4,
+        ocr_k: int = 8,
+        conversation: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        processed_query = self.query_processor.process(query)
+        processed_query = self.query_processor.process(
+            query,
+            conversation=conversation,
+        )
         query_embedding = self.mm_client.embed_query(processed_query)
 
-        text_results = self.db_client.search_by_embedding(
+        multimodal_text_results = self.db_client.search_by_embedding(
             embedding=query_embedding,
             collection_name=self.text_collection_name,
             k=text_k,
@@ -62,19 +78,90 @@ class TextbookRAGService:
             k=image_k,
         )
 
+        ocr_text_results: List[SearchResult] = []
+        if self.ocr_collection_name and self.text_embedding_client:
+            try:
+                ocr_query_embedding = self.text_embedding_client.embed_query(processed_query)
+                ocr_text_results = self.db_client.search_by_embedding(
+                    embedding=ocr_query_embedding,
+                    collection_name=self.ocr_collection_name,
+                    k=ocr_k,
+                )
+            except Exception as exc:
+                # OCR 是补充召回通道，失败时保留多模态主链路的可用性。
+                logger.warning("OCR 文本检索失败，已降级为多模态检索: %s", exc)
+
+        text_results = self._fuse_text_results(
+            multimodal_text_results,
+            ocr_text_results,
+            limit=text_k,
+        )
+
         return {
             "query": processed_query,
             "text_results": text_results,
+            "multimodal_text_results": multimodal_text_results,
+            "ocr_text_results": ocr_text_results,
             "image_results": image_results,
         }
+
+    @staticmethod
+    def _result_key(content: str, metadata: Dict[str, Any]) -> Tuple[Any, ...]:
+        return (
+            metadata.get("source_file", ""),
+            metadata.get("page", ""),
+            metadata.get("chunk_index", metadata.get("block_index", "")),
+            content.strip(),
+        )
+
+    @classmethod
+    def _fuse_text_results(
+        cls,
+        multimodal_results: List[SearchResult],
+        ocr_results: List[SearchResult],
+        limit: int,
+        rrf_k: int = 60,
+    ) -> List[SearchResult]:
+        """使用 RRF 融合不同 Embedding 空间的排序，避免直接比较距离分数。"""
+        fused: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        for channel, results in (
+            ("multimodal_text", multimodal_results),
+            ("ocr_text", ocr_results),
+        ):
+            for rank, (content, metadata, channel_score) in enumerate(results, 1):
+                key = cls._result_key(content, metadata)
+                if key not in fused:
+                    fused[key] = {
+                        "content": content,
+                        "metadata": dict(metadata or {}),
+                        "score": 0.0,
+                        "channels": [],
+                    }
+                item = fused[key]
+                item["score"] += 1.0 / (rrf_k + rank)
+                item["channels"].append(channel)
+                item["metadata"][f"{channel}_score"] = round(channel_score, 6)
+
+        ranked = sorted(fused.values(), key=lambda item: item["score"], reverse=True)
+        output: List[SearchResult] = []
+        for item in ranked[:limit]:
+            item["metadata"]["retrieval_channels"] = ",".join(item["channels"])
+            output.append((item["content"], item["metadata"], item["score"]))
+        return output
 
     def search(
         self,
         query: str,
         k: int = 8,
         image_k: int = 4,
+        conversation: Optional[List[Dict[str, Any]]] = None,
     ) -> List[SearchResult]:
-        payload = self.retrieve(query=query, text_k=k, image_k=image_k)
+        payload = self.retrieve(
+            query=query,
+            text_k=k,
+            image_k=image_k,
+            conversation=conversation,
+        )
         return payload["text_results"]
 
     @staticmethod
@@ -154,12 +241,23 @@ class TextbookRAGService:
     def get_stats(self) -> Dict[str, Any]:
         text_stats = self.db_client.get_stats(collection_name=self.text_collection_name)
         image_stats = self.db_client.get_stats(collection_name=self.image_collection_name)
+        ocr_stats = (
+            self.db_client.get_stats(collection_name=self.ocr_collection_name)
+            if self.ocr_collection_name
+            else None
+        )
         return {
-            "connected": text_stats.get("connected") and image_stats.get("connected"),
+            "connected": (
+                text_stats.get("connected")
+                and image_stats.get("connected")
+                and (ocr_stats is None or ocr_stats.get("connected"))
+            ),
             "text_collection": self.text_collection_name,
             "image_collection": self.image_collection_name,
+            "ocr_collection": self.ocr_collection_name,
             "text_records": text_stats.get("total_records", 0),
             "image_records": image_stats.get("total_records", 0),
+            "ocr_records": ocr_stats.get("total_records", 0) if ocr_stats else 0,
         }
 
     def get_sources(

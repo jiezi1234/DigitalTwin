@@ -41,6 +41,10 @@ htmlcov/
 # PDF 导出图片
 output/
 
+# 脱敏评测标注和实验结果（保留 *.example.jsonl）
+evaluation/retrieval_queries.jsonl
+evaluation/results/
+
 
 # IDE & 工具
 .idea/

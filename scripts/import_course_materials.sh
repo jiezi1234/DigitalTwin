@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-python -m src.import_course_materials \
+python -m src.cli.import_course_materials \
   --persist-dir "${PROJECT_ROOT}/chroma_db_mm" \
   --output-root "${PROJECT_ROOT}/output/course_mm" \
   --notes-files \
@@ -19,4 +19,4 @@ python -m src.import_course_materials \
   --mm-text-batch-size 8 \
   --mm-text-workers 4 \
   --mm-image-batch-size 1 \
-  --mm-image-workers 2 
+  --mm-image-workers 2

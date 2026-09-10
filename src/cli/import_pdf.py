@@ -1,6 +1,6 @@
 """
 PDF 教材导入脚本 (交互式)
-使用方式: python -m src.import_pdf
+使用方式: python -m src.cli.import_pdf
 """
 
 import os

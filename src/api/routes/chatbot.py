@@ -9,6 +9,7 @@ from src.infrastructure.llm_client import LLMClient
 from src.infrastructure.db_client import DBClient
 from src.infrastructure.persona_manager import PersonaManager
 from src.services.rag_service import RAGService
+from src.rag.react_router import ReActRetrievalRouter
 
 logger = logging.getLogger(__name__)
 chat_bp = Blueprint("chat", __name__)
@@ -37,18 +38,45 @@ def get_llm_client():
         llm_client = LLMClient()
     return llm_client
 
+
 def get_rag_service(persona):
     pid = persona["id"]
     if pid not in rag_services:
-        source_type = persona.get("source_type", "chat")
+        active_llm_client = get_llm_client()
+        react_router = None
+        if Config.REACT_ENABLED:
+            react_router = ReActRetrievalRouter(
+                llm_client=active_llm_client,
+                model=Config.REACT_ROUTER_MODEL,
+                history_messages=Config.REACT_HISTORY_MESSAGES,
+            )
         rag_services[pid] = RAGService(
-            llm_client=get_llm_client(),
+            llm_client=active_llm_client,
             db_client=get_db_client(),
             collection_name=persona["collection"],
-            enable_self_rag=True,
-            self_rag_mode="knowledge" if source_type == "knowledge" else "chat",
+            enable_coreference_resolution=Config.RAG_COREFERENCE_RESOLUTION_ENABLED,
+            enable_query_rewriting=Config.RAG_QUERY_REWRITING_ENABLED,
+            query_history_messages=Config.RAG_QUERY_HISTORY_MESSAGES,
+            enable_neighbor_expansion=Config.RAG_NEIGHBOR_EXPANSION_ENABLED,
+            neighbor_window=Config.RAG_NEIGHBOR_WINDOW,
+            neighbor_anchors=Config.RAG_NEIGHBOR_ANCHORS,
+            neighbor_max_results=Config.RAG_NEIGHBOR_MAX_RESULTS,
+            enable_hybrid_search=Config.RAG_HYBRID_SEARCH_ENABLED,
+            hybrid_candidates=Config.RAG_HYBRID_CANDIDATES,
+            hybrid_rrf_k=Config.RAG_HYBRID_RRF_K,
+            dense_weight=Config.RAG_DENSE_WEIGHT,
+            bm25_weight=Config.RAG_BM25_WEIGHT,
+            enable_reranking=Config.RAG_RERANK_ENABLED,
+            rerank_model=Config.RAG_RERANK_MODEL,
+            rerank_candidates=Config.RAG_RERANK_CANDIDATES,
+            react_router=react_router,
+            retrieval_enabled=Config.RAG_ENABLED,
+            max_results=Config.RAG_MAX_RESULTS,
+            max_context_length=Config.RAG_MAX_CONTEXT_LENGTH,
+            include_metadata=Config.RAG_INCLUDE_METADATA,
         )
     return rag_services[pid]
+
 
 @chat_bp.route("/chat", methods=["POST"])
 def chat():
@@ -69,9 +97,14 @@ def chat():
         if not persona:
             all_personas = persona_manager.list()
             persona = all_personas[0] if all_personas else None
-        
+
         if not persona:
-            return jsonify({"status": "error", "error": "未找到任何分身，请先通过导入脚本创建"}), 404
+            return (
+                jsonify(
+                    {"status": "error", "error": "未找到任何分身，请先通过导入脚本创建"}
+                ),
+                404,
+            )
 
         # 获取会话历史
         if session_id not in sessions:
@@ -83,33 +116,36 @@ def chat():
 
         # 获取 RAG 服务并执行对话管道
         service = get_rag_service(persona)
-        
-        reply, eval_stats = service.chat(
+
+        reply, retrieval_stats = service.chat(
             query=user_message,
-            conversation=messages[:-1], # 传入历史
+            conversation=messages[:-1],  # 传入历史
             persona=persona,
             system_prefix=Config.RAG_SYSTEM_PREFIX,
             role_instruction=Config.RAG_ROLE_INSTRUCTION,
-            max_tokens=persona.get("model_params", {}).get("max_tokens", 500)
+            max_tokens=persona.get("model_params", {}).get("max_tokens", 500),
         )
 
         # 添加助手回复到历史
         messages.append({"role": "assistant", "content": reply})
-        
+
         # 限制历史长度
         if len(messages) > 40:
             sessions[session_id] = messages[-40:]
 
-        return jsonify({
-            "status": "success",
-            "reply": reply,
-            "session_id": session_id,
-            "debug": eval_stats # 返回评估信息供前端展示/调试
-        })
+        return jsonify(
+            {
+                "status": "success",
+                "reply": reply,
+                "session_id": session_id,
+                "debug": retrieval_stats,  # 返回基础检索信息供前端展示/调试
+            }
+        )
 
     except Exception as e:
         logger.error(f"聊天接口异常: {e}", exc_info=True)
         return jsonify({"status": "error", "error": str(e)}), 500
+
 
 @chat_bp.route("/reset", methods=["POST"])
 def reset():

@@ -15,7 +15,7 @@
 | **代码重复** | 高（两个 RAG 实现） | 低（共享引擎和组件） |
 | **可观测性** | 基础日志 | 完整的 OpenTelemetry 追踪 |
 | **文档** | 无 | 完整的架构和 API 文档 |
-| **测试** | 基础测试 | 单元 + 集成测试（80%+ 覆盖率） |
+| **测试** | 基础测试 | 单元测试 + Mock 外部服务的组件集成测试 |
 
 ### 主要变化
 
@@ -365,27 +365,7 @@ loader = DataLoaderFactory.create("custom", ...)
 documents = loader.load()
 ```
 
-### Q4: 原项目中的 Self-RAG 怎么办？
-
-Self-RAG 代码保持不变，位置在 `src/core/self_rag.py`。
-
-在重构版本中，可以结合 RAGService 使用：
-
-```python
-from src.services.rag_service import RAGService
-from src.core.self_rag import SelfRAG
-
-# 先用 RAGService 搜索
-rag_service = RAGService(...)
-results = rag_service.search(query, persona)
-context = rag_service.format_context(results)
-
-# 再用 Self-RAG 验证和反思
-self_rag = SelfRAG(llm_client)
-refined_results = self_rag.reflect_and_refine(results, query)
-```
-
-### Q5: 分身管理器需要改动吗？
+### Q4: 分身管理器需要改动吗？
 
 不需要，`PersonaManager` 完全保持不变，位置在 `src/core/persona_manager.py`。
 

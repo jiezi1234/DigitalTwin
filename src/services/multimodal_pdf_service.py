@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import concurrent.futures
+from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from src.infrastructure.document import Document
@@ -104,8 +105,11 @@ class MultiModalPDFIndexService:
             text_blocks = page_data.get("text_blocks", [])
             for image_entry in page_data.get("images", []):
                 relative_path = image_entry["file"]
-                stored_path = os.path.join(export_subdir, relative_path)
-                image_path = os.path.join(export_dir, relative_path)
+                # 结构化 PDF 数据统一使用 POSIX 相对路径；转成本地路径时按
+                # 当前操作系统重新拼接，避免 Windows 上出现混合分隔符。
+                relative_parts = PurePosixPath(relative_path.replace("\\", "/")).parts
+                stored_path = os.path.join(export_subdir, *relative_parts)
+                image_path = os.path.normpath(os.path.join(export_dir, *relative_parts))
                 nearby_text = self._get_nearby_text(text_blocks, image_entry["image_index"])
                 image_hash = image_entry.get("image_hash") or stored_path
 

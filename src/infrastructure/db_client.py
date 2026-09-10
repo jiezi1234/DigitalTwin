@@ -21,14 +21,12 @@ meter = get_meter(__name__)
 
 # 定义指标
 db_operations_total = meter.create_counter(
-    "db_operations_total",
-    description="Total number of database operations",
-    unit="1"
+    "db_operations_total", description="Total number of database operations", unit="1"
 )
 db_operation_duration = meter.create_histogram(
     "db_operation_duration_seconds",
     description="Duration of database operations",
-    unit="s"
+    unit="s",
 )
 
 
@@ -92,7 +90,7 @@ class DBClient:
         """
         start_time = time.time()
         attributes = {"db.collection": collection_name, "operation": "add_documents"}
-        status = "error" # Default status
+        status = "error"  # Default status
 
         with tracer.start_as_current_span("db.add_documents") as span:
             span.set_attribute("db.collection", collection_name)
@@ -150,7 +148,7 @@ class DBClient:
         """
         start_time = time.time()
         attributes = {"db.collection": collection_name, "operation": "search"}
-        status = "error" # Default status
+        status = "error"  # Default status
 
         with tracer.start_as_current_span("db.vector_search") as span:
             span.set_attribute("db.collection", collection_name)
@@ -185,6 +183,7 @@ class DBClient:
 
             except Exception as e:
                 import traceback
+
                 logger.error(f"搜索失败: {e}\n{traceback.format_exc()}")
                 span.record_exception(e)
                 raise
@@ -225,6 +224,51 @@ class DBClient:
                     "error": str(e),
                 }
 
+    def get_records(
+        self,
+        collection_name: str,
+        where: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Tuple[str, Dict[str, Any], float]]:
+        """按元数据读取记录，不触发额外的 Embedding 调用。"""
+        start_time = time.time()
+        attributes = {"db.collection": collection_name, "operation": "get_records"}
+        status = "error"
+
+        with tracer.start_as_current_span("db.metadata_get") as span:
+            span.set_attribute("db.collection", collection_name)
+            try:
+                collection = self._chroma_client.get_or_create_collection(
+                    name=collection_name
+                )
+                query_args: Dict[str, Any] = {
+                    "include": ["documents", "metadatas"],
+                }
+                if where:
+                    query_args["where"] = where
+                if limit is not None:
+                    query_args["limit"] = max(1, limit)
+
+                payload = collection.get(**query_args)
+                documents = payload.get("documents") or []
+                metadatas = payload.get("metadatas") or []
+                output = [
+                    (document, dict(metadata or {}), 1.0)
+                    for document, metadata in zip(documents, metadatas)
+                ]
+                span.set_attribute("db.results_count", len(output))
+                status = "success"
+                return output
+            except Exception as exc:
+                logger.error("按元数据读取记录失败: %s", exc)
+                span.record_exception(exc)
+                raise
+            finally:
+                duration = time.time() - start_time
+                attributes["status"] = status
+                db_operations_total.add(1, attributes)
+                db_operation_duration.record(duration, attributes)
+
     def search_by_embedding(
         self,
         embedding: List[float],
@@ -233,7 +277,10 @@ class DBClient:
     ) -> List[Tuple[str, Dict[str, Any], float]]:
         """使用预计算 query embedding 直接检索"""
         start_time = time.time()
-        attributes = {"db.collection": collection_name, "operation": "search_by_embedding"}
+        attributes = {
+            "db.collection": collection_name,
+            "operation": "search_by_embedding",
+        }
         status = "error"
 
         with tracer.start_as_current_span("db.vector_search_by_embedding") as span:
@@ -241,7 +288,9 @@ class DBClient:
             span.set_attribute("db.k", k)
 
             try:
-                collection = self._chroma_client.get_or_create_collection(name=collection_name)
+                collection = self._chroma_client.get_or_create_collection(
+                    name=collection_name
+                )
                 results = collection.query(
                     query_embeddings=[embedding],
                     n_results=k,
@@ -253,7 +302,9 @@ class DBClient:
                 distances = results.get("distances", [[]])[0]
 
                 output = []
-                for document, metadata, distance in zip(documents, metadatas, distances):
+                for document, metadata, distance in zip(
+                    documents, metadatas, distances
+                ):
                     score = 1.0 / (1.0 + float(distance))
                     output.append((document, metadata or {}, score))
 
@@ -293,7 +344,7 @@ class DBClient:
         """
         start_time = time.time()
         attributes = {"db.collection": collection_name, "operation": "bulk_import"}
-        status = "error" # Default status
+        status = "error"  # Default status
 
         with tracer.start_as_current_span("db.bulk_import") as span:
             span.set_attribute("db.collection", collection_name)

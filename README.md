@@ -1,214 +1,278 @@
 # DigitalTwin
 
-基于 RAG 的数字分身与数字助教系统。通过微信聊天记录构建个人数字分身，通过 PDF 教材构建支持图文混合检索的 AI 助教。
+DigitalTwin 是一个面向两类场景的 RAG 交互系统：使用微信聊天记录构建人物风格对话，使用 PDF 教材构建支持文字、OCR 与图片检索的数字助教。项目采用分层架构，将模型调用、向量库、检索策略、业务服务和 Flask API 解耦，便于独立测试和替换组件。
 
-## 功能
+## 核心能力
 
-- **数字分身** — 导入微信聊天记录，生成模拟本人说话风格的 AI 对话
-- **数字助教** — 导入 PDF 教材，基于教材内容进行图文混合问答
-- **RAG 检索增强** — 查询改写、指代消解、MMR 多样性搜索
-- **多模态教材检索** — 文本块与图片分库索引，支持图片检索与嵌入式引用
-- **断点续跑导入** — 教材导入支持 tracking、增量更新与中断恢复
-- **可观测性** — OpenTelemetry 追踪 + Prometheus + Loki + Grafana 监控栈
+- 人物对话：清洗并增量导入聊天记录，按人物管理独立的 Chroma collection。
+- 按需检索：ReAct 路由根据当前问题和最近会话选择直接回答或调用检索工具。
+- 历史感知查询理解：结合最近会话，用一次结构化模型调用完成指代消解与查询改写。
+- 混合召回：使用 Dense/MMR 与轻量中文 BM25 双路召回，通过加权 RRF 融合排名；单通道异常时自动降级。
+- 候选重排：用一次结构化 LLM 调用重排首轮 Top-N 候选，记录重排前后的分数与名次，解析失败时保持原排名。
+- 时间邻域扩展：语义命中聊天消息后，按会话 ID 和消息序号补齐前后消息，恢复完整对话语境。
+- 教材问答：并行召回多模态文本、OCR 文本和教材图片；使用 RRF 融合两个文本排序。
+- 图文回答：将命中图片交给视觉语言模型，并通过 `[图1]` 等标记嵌入前端回答。
+- 可复现评测：对比基础相似度检索与“查询改写 + 混合召回 + 时间邻域扩展”，统计 Hit Rate、MRR、Recall 和延迟。
+- 可观测性：使用 OpenTelemetry 采集模型和数据库调用，支持接入 Tempo、Prometheus、Loki 与 Grafana。
 
-## 架构
+## 系统架构
 
-```
-API 路由层 (Flask)
-    ↓
-服务层 (RAGService / TextbookRAGService)
-    ↓
-RAG 引擎层 (RAGEngine + QueryProcessor)
-    ↓
-基础设施层 (LLMClient + DBClient + Telemetry)
+```text
+浏览器 / API 调用方
+        │
+        ▼
+Flask API（人物对话 / 数字助教）
+        │
+        ▼
+Service（RAGService / TextbookRAGService）
+        │
+        ├── 人物对话：ReAct 路由 → 查询理解 → Dense/MMR + BM25 → 加权 RRF → LLM 重排 → 时间邻域扩展
+        │
+        └── 教材问答：多模态文本 ─┐
+                    OCR 文本 ─────┼→ RRF 文本融合 → 图文上下文 → VL 模型
+                    教材图片 ─────┘
+        │
+        ▼
+Infrastructure（DashScope / ChromaDB / OpenTelemetry）
 ```
 
 ## 技术栈
 
-| 组件 | 技术 |
-|------|------|
-| 后端 | Flask 3.0 + Flask-CORS |
-| LLM | 通义千问 (`qwen-plus` / `qwen-vl-plus`) via DashScope |
-| 向量数据库 | ChromaDB |
-| 嵌入模型 | `multimodal-embedding-v1` + `text-embedding-v4` |
-| RAG 框架 | LangChain |
-| 可观测性 | OpenTelemetry + Prometheus + Loki + Grafana |
-| 前端 | 原生 HTML/CSS/JS |
+| 模块 | 实现 |
+|---|---|
+| Web API | Python 3.10+、Flask、Flask-CORS |
+| 模型服务 | DashScope Qwen 文本模型与视觉语言模型 |
+| 检索与排序 | ChromaDB、LangChain Chroma、MMR、BM25、加权 RRF、LLM Reranker |
+| 向量模型 | `text-embedding-v4`、`multimodal-embedding-v1` |
+| PDF 处理 | PyMuPDF，原生文本提取、OCR、图片导出 |
+| 可观测性 | OpenTelemetry、Prometheus、Tempo、Loki、Grafana |
+| 前端 | 原生 HTML、CSS、JavaScript |
+
+## 项目结构
+
+```text
+DigitalTwin/
+├── src/
+│   ├── api/                  # Flask 应用、配置与路由
+│   ├── cli/                  # 服务启动、数据导入、索引与评测命令
+│   ├── evaluation/           # 检索评测模型、指标与报告逻辑
+│   ├── infrastructure/       # LLM、Embedding、ChromaDB、Telemetry 客户端
+│   ├── loaders/              # 微信 CSV 与 PDF 加载、清洗、切分
+│   ├── rag/                  # 查询处理、ReAct 路由、RAG 检索引擎
+│   └── services/             # 人物对话、教材问答与导入服务
+├── frontend/                 # 人物对话与数字助教页面
+├── tests/                    # 单元测试和组件测试
+├── evaluation/               # 评测数据格式、示例与本地结果目录
+├── scripts/                  # 启动、课程导入和监控脚本
+├── monitoring/               # Prometheus、Tempo、Loki 配置
+├── docs/                     # 架构、API 与迁移文档
+├── data/                     # 本地原始数据，不提交版本库
+├── output/                   # PDF 图片和结构化导出，不提交版本库
+└── chroma_db*/               # 本地向量库，不提交版本库
+```
+
+`src/cli/` 只负责解析参数和组装组件，业务逻辑位于 `services/`、`rag/` 与 `infrastructure/`，因此 CLI 和 Web API 可以复用同一套实现。
 
 ## 快速开始
 
-### 环境准备
+### 1. 安装
+
+在项目根目录创建 Python 3.10 或更高版本的虚拟环境，然后安装项目：
 
 ```bash
-# 克隆项目
-git clone https://github.com/jiezi1234/DigitalTwin.git
-cd DigitalTwin
-
-# 创建 conda 环境
-conda create -n DT python=3.10
-conda activate DT
-
-# 安装依赖
-pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
-### 配置
+### 2. 配置
 
-复制 `.env.example` 为 `.env`，填入你的 DashScope API Key：
+复制环境变量模板：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Linux 或 macOS：
 
 ```bash
 cp .env.example .env
 ```
 
+至少需要填写：
+
 ```env
 DASHSCOPE_API_KEY=your-api-key-here
 ```
 
-### 导入数据
+模型、collection、召回数量与可观测性开关均可在 [.env.example](./.env.example) 中配置。不要提交包含真实密钥的 `.env`。
+
+### 3. 准备本地数据
+
+聊天记录放在 `data/csv/`。导入器支持 `msg` 或 `message` 作为消息列，并读取 `talker`、`is_sender`、`CreateTime` / `chat_time`、`room_name` / `room` 等元数据。涉及真实聊天内容时应先脱敏并获得数据使用授权。
+
+默认课程导入脚本期望以下文件：
+
+```text
+data/pdf/notes1_2022.pdf
+data/pdf/notes7_2022.pdf
+data/pdf/textbook.pdf
+```
+
+其中 notes 文件进入多模态文本与图片索引，textbook 进入 OCR 文本索引。原始数据、导出图片和向量库均被 Git 忽略，仓库不附带这些运行数据。
+
+### 4. 导入数据
+
+交互式创建人物并导入微信 CSV：
 
 ```bash
-# 导入微信聊天记录 CSV（数字分身）
-python -m src.import_wechat_csv
+python -m src.cli.import_wechat_csv
+```
 
-# 导入课程教材
-# notes1_2022.pdf / notes7_2022.pdf -> 多模态文本块 + 图片向量
-# textbook.pdf -> OCR 文本提取后入文本向量库
+人物索引使用 `conversation_id` 和 `message_index` 完成时间邻域扩展。升级已有向量库后，请在交互式导入中选择一次“全量导入”，为旧记录补齐这两个元数据字段。
+
+一键导入默认课程资料：
+
+```bash
 bash scripts/import_course_materials.sh
 ```
 
-课程教材导入后的默认产物：
-- 向量库目录：`./chroma_db_mm`
-- 导出目录：`./output/course_mm`
-- tracking 目录：`./chroma_db_mm/import_tracking`
+脚本默认执行增量导入，并将断点记录写入 `chroma_db_mm/import_tracking/`。需要清空目标 collections 后重建时，直接运行 CLI 并显式添加 `--reset`：
 
-默认 collection：
-- `textbook_mm_text_embeddings`
-- `textbook_mm_image_embeddings`
-- `textbook_ocr_text_embeddings`
+```bash
+python -m src.cli.import_course_materials --reset
+```
 
-说明：
-- `scripts/import_course_materials.sh` 当前默认执行全量重建，因为脚本里带了 `--reset`
-- 如果希望启用真正的增量/断点续跑，请移除脚本中的 `--reset`
-- `notes1_2022.pdf` 与 `notes7_2022.pdf` 走多模态导入
-- `textbook.pdf` 走 OCR 页级处理、批次级文本向量化和断点续跑
+可用 `python -m src.cli.import_course_materials --help` 查看文件路径、并发数、批大小和 collection 参数。
 
-### 启动服务
+### 5. 启动
+
+课程资料使用默认脚本配置启动：
 
 ```bash
 bash scripts/start_server.sh
 ```
 
-- 数字分身：http://localhost:8080
-- 数字助教：http://localhost:8080/tutor
-
-`scripts/start_server.sh` 默认连接：
-- `./chroma_db_mm`
-- `./output/course_mm`
-- `textbook_mm_text_embeddings`
-- `textbook_mm_image_embeddings`
-- `textbook_ocr_text_embeddings`
-
-## 项目结构
-
-```
-src/
-├── api/                           # Flask 路由层
-│   ├── app.py                         # 应用工厂
-│   ├── config.py                      # 配置管理
-│   └── routes/                        # 路由端点
-│       ├── chatbot.py                     # 聊天接口
-│       ├── persona.py                     # 分身管理接口
-│       └── tutor.py                       # 助教接口
-├── infrastructure/                # 基础设施层
-│   ├── db_client.py                   # ChromaDB 客户端
-│   ├── llm_client.py                  # DashScope LLM 客户端
-│   ├── multimodal_embedding_client.py # 多模态向量客户端
-│   ├── text_embedding_client.py       # 文本向量客户端
-│   ├── telemetry.py                   # OpenTelemetry 配置
-│   ├── persona_manager.py            # 分身元数据管理
-│   └── document.py                    # 统一文档模型
-├── loaders/                       # 数据加载层
-│   ├── base.py                        # DataLoader 基类 + 工厂
-│   ├── csv_loader.py                  # 微信 CSV 加载器
-│   └── pdf_loader.py                  # PDF 文档加载器
-├── rag/                           # RAG 引擎层
-│   ├── rag_engine.py                  # 向量检索引擎
-│   ├── query_processor.py            # 查询优化（改写 / 指代消解）
-│   └── self_rag.py                    # Self-RAG
-├── services/                      # 业务服务层
-│   ├── rag_service.py                 # 数字分身服务
-│   ├── textbook_rag_service.py        # 数字助教服务
-│   ├── import_service.py              # 通用导入服务
-│   └── multimodal_pdf_service.py      # 多模态 PDF 导入服务
-├── run_server.py                  # 服务入口
-├── import_wechat_csv.py           # CSV 导入脚本
-├── import_pdf.py                  # 旧版 PDF 导入脚本
-├── export_pdf_assets.py           # PDF 文本块 / 图片导出脚本
-├── rebuild_multimodal_pdf_index.py # 多模态 PDF 重建脚本
-└── import_course_materials.py     # 课程材料导入脚本
-
-frontend/                          # 前端页面
-scripts/                           # 启动 / 导入脚本
-tests/                             # 测试
-docs/                              # 文档
-monitoring/                        # 监控栈配置
-```
-
-## 教材检索说明
-
-当前数字助教采用双路教材检索：
-- 文本块检索：`textbook_mm_text_embeddings`
-- 图片检索：`textbook_mm_image_embeddings`
-
-回答阶段会：
-- 将命中的图片作为多模态输入发送给视觉模型
-- 在回答中使用 `[图1]`、`[图2]` 等占位符
-- 由前端将图片嵌入到回答正文中
-
-`textbook.pdf` 的 OCR 文本目前会导入到 `textbook_ocr_text_embeddings`，用于保留扫描教材的文本索引。
-
-## 监控
-
-项目集成了完整的可观测性栈（需要 Docker）：
+或直接使用 Python 模块和 `.env` 中的配置：
 
 ```bash
-# 启动监控服务（Prometheus + Loki + Grafana）
-bash scripts/start_monitoring.sh
+python -m src.cli.run_server
+```
 
-# 停止
+启动后访问：
+
+- 人物对话：<http://localhost:8080>
+- 数字助教：<http://localhost:8080/tutor>
+
+执行 `pip install -e .` 后，也可以使用 `digitaltwin-server`、`digitaltwin-import`、`digitaltwin-import-course-materials` 等命令行入口。
+
+## 两条 RAG 链路
+
+### 人物风格对话
+
+1. ReAct 路由读取用户问题和最近会话，输出 `retrieve` 或 `respond`。
+2. 需要检索时，QueryProcessor 结合最近会话，用一次结构化调用生成独立检索查询并提取实体、时间范围。
+3. RAGEngine 获取 Dense/MMR 与 BM25 候选，用加权 RRF 融合不同量纲的排名；任一通道失败时使用另一通道继续回答。
+4. BM25 索引在 collection 第一次被查询时从 Chroma 原文懒加载并缓存；导入数据后新启动的服务会重建索引，也可调用 `invalidate()` 主动失效。
+5. LLM Reranker 在一次结构化调用中对 Top-N 候选评分；异常、空响应或 JSON 解析失败时保留 RRF 排名。
+6. 围绕前几个重排后的命中点补齐同一会话的前后消息，按原对话顺序组织并对重叠邻域去重。
+7. 模型结合人物提示词、完整对话片段和会话历史生成回复。
+
+路由无法解析或模型调用失败时默认选择检索，以减少遗漏相关记忆的风险。系统不保存或返回模型的内部推理过程。
+
+### PDF 图文知识问答
+
+1. PDF 导入阶段提取文本块、页级 OCR 文本和页面图片，分别写入三个 collection。
+2. 查询阶段使用教材领域改写，并召回多模态文本、OCR 文本和图片。
+3. 多模态文本与 OCR 文本来自不同向量空间，使用 Reciprocal Rank Fusion 合并排名，而不是直接比较分数。
+4. 命中图片作为多模态输入发送给视觉语言模型，回答中的图片标记由前端替换为实际图片。
+
+OCR 通道不可用时会降级为多模态文本与图片检索，不让单个外部调用中断整条问答链路。
+
+## 检索评测
+
+复制示例并补充脱敏的人工标注查询：
+
+```bash
+Copy-Item evaluation/retrieval_queries.example.jsonl evaluation/retrieval_queries.jsonl
+```
+
+运行基础相似度检索与“查询改写 + 混合召回 + LLM 重排 + 时间邻域扩展”对比：
+
+```bash
+python -m src.cli.evaluate_retrieval \
+  --dataset evaluation/retrieval_queries.jsonl \
+  --collection persona_xxxxxxxx \
+  --k 5
+```
+
+报告默认写入 `evaluation/results/`，包含 Hit Rate@K、MRR@K、Recall@K、平均/P50/P95 延迟以及逐样本变化。`evaluation/retrieval_queries.example.jsonl` 只描述格式，不代表真实实验结果；项目指标应由完整标注集和保存的评测报告支撑。详见 [evaluation/README.md](./evaluation/README.md)。
+
+## 测试与 CI
+
+```bash
+python -m pytest
+```
+
+测试通过 Mock 隔离外部模型和向量服务，不会产生 API 费用。PDF 集成用例在本地测试文件缺失时会跳过。GitHub Actions 会在 Python 3.10 的 Linux 和 Windows 环境执行同一测试套件。
+
+覆盖率：
+
+```bash
+python -m pytest --cov=src --cov-report=term-missing
+```
+
+## 可观测性
+
+将 `.env` 中的 `OTEL_ENABLED` 设为 `true` 后，可导出模型和数据库调用的 trace、日志和指标。启动本地监控容器：
+
+```bash
+bash scripts/start_monitoring.sh
+```
+
+默认地址：
+
+| 服务 | 地址 |
+|---|---|
+| Grafana | <http://localhost:3000> |
+| Prometheus | <http://localhost:9090> |
+| Tempo | `http://localhost:4318`（OTLP HTTP） |
+| Loki | `http://localhost:3100/otlp`（OTLP HTTP） |
+
+停止并移除这些监控容器：
+
+```bash
 bash scripts/stop_monitoring.sh
 ```
 
-## 测试
+监控脚本负责启动容器，但仓库没有预置 Grafana 数据源和仪表盘；首次使用需要在 Grafana 中手动添加 Prometheus、Tempo 和 Loki。
 
-```bash
-pytest tests/ -v
-```
+## HTTP 接口
 
-## 文档
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/` | 人物对话页面 |
+| `POST` | `/chat` | 人物对话 |
+| `POST` | `/reset` | 清空人物对话会话 |
+| `GET` | `/api/personas` | 查询人物列表 |
+| `DELETE` | `/api/personas/<persona_id>` | 删除人物及其 collection |
+| `GET` | `/tutor` | 数字助教页面 |
+| `POST` | `/tutor/chat` | 教材问答，支持 SSE 流式输出 |
+| `POST` | `/tutor/import` | 在后台触发 PDF 多模态导入 |
+| `POST` | `/tutor/reset` | 清空助教会话 |
+| `GET` | `/tutor/stats` | 查询教材 collections 统计 |
+
+请求和响应示例见 [API 文档](./docs/api.md)。
+
+## 仓库边界与已知限制
+
+- 本仓库聚焦 RAG 推理与检索评测，不包含 PyTorch / PEFT LoRA 训练代码、训练数据或 SwanLab 实验记录。
+- 仓库目前不包含 Locust 压测脚本与可复核的 TTFT 报告；性能数字应在补齐压测资产后再作为仓库结论。
+- 会话保存在单进程内存中，服务重启后丢失，也不支持多实例共享。
+- API 尚未实现身份认证、租户隔离、限流和生产级任务队列；不要直接暴露到公网。
+- `/tutor/import` 只返回后台任务已启动，详细进度需通过应用日志查看。
+
+## 进一步阅读
 
 - [架构设计](./docs/architecture.md)
 - [API 接口](./docs/api.md)
-- [迁移指南](./docs/MIGRATION.md)（从旧版 DigitalTwin 迁移）
-
-## 环境变量
-
-详见 [.env.example](./.env.example)，主要配置项：
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DASHSCOPE_API_KEY` | DashScope API 密钥 | — |
-| `CHAT_MODEL` | 对话模型 | `qwen-plus` |
-| `TUTOR_VL_MODEL` | 助教视觉模型 | `qwen-vl-plus` |
-| `EMBED_MODEL` | 嵌入模型 | `text-embedding-v4` |
-| `MM_EMBED_MODEL` | 多模态嵌入模型 | `multimodal-embedding-v1` |
-| `CHROMA_PERSIST_DIR` | ChromaDB 存储路径 | `./chroma_db` |
-| `PDF_EXPORT_ROOT` | 教材图片导出根目录 | `./output` |
-| `TUTOR_MM_TEXT_COLLECTION` | 助教多模态文本 collection | `textbook_mm_text_embeddings` |
-| `TUTOR_MM_IMAGE_COLLECTION` | 助教多模态图片 collection | `textbook_mm_image_embeddings` |
-| `TUTOR_OCR_TEXT_COLLECTION` | OCR 文本 collection | `textbook_ocr_text_embeddings` |
-| `DASHSCOPE_MM_MAX_CONCURRENCY` | 多模态 embedding 全局并发门限 | `2` |
-| `DASHSCOPE_TEXT_MAX_CONCURRENCY` | 文本 embedding 全局并发门限 | `2` |
-| `RAG_QUERY_REWRITING_ENABLED` | 查询改写 | `true` |
-| `RAG_COREFERENCE_RESOLUTION_ENABLED` | 指代消解 | `true` |
-| `OTEL_ENABLED` | 启用 OpenTelemetry | `false` |
+- [迁移指南](./docs/MIGRATION.md)
+- [检索评测说明](./evaluation/README.md)

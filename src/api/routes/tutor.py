@@ -75,6 +75,8 @@ def get_tutor_service():
                 db_client=db_client,
                 text_collection_name=Config.TUTOR_MM_TEXT_COLLECTION,
                 image_collection_name=Config.TUTOR_MM_IMAGE_COLLECTION,
+                ocr_collection_name=Config.TUTOR_OCR_TEXT_COLLECTION,
+                query_history_messages=Config.RAG_QUERY_HISTORY_MESSAGES,
             )
         except Exception as e:
             logger.warning(f"助教服务初始化失败 (可能未导入课本): {e}")
@@ -107,8 +109,15 @@ def tutor_chat():
     image_hits = []
     if service:
         try:
-            retrieval = service.retrieve(user_message, text_k=8, image_k=4)
+            retrieval = service.retrieve(
+                user_message,
+                text_k=Config.TUTOR_TEXT_TOP_K,
+                image_k=Config.TUTOR_IMAGE_TOP_K,
+                ocr_k=Config.TUTOR_OCR_TOP_K,
+                conversation=messages[:-1],
+            )
             results = retrieval["text_results"]
+            ocr_results = retrieval["ocr_text_results"]
             image_results = retrieval["image_results"]
             if results:
                 context_text = service.format_context(
@@ -118,9 +127,10 @@ def tutor_chat():
                 image_context = service.format_image_context(image_results)
                 image_hits = service.serialize_images(image_results)
             logger.info(
-                "[Tutor Retrieval] session=%s text_hits=%d image_hits=%d vl_model=%s",
+                "[Tutor Retrieval] session=%s text_hits=%d ocr_hits=%d image_hits=%d vl_model=%s",
                 session_id,
                 len(results),
+                len(ocr_results),
                 len(image_hits),
                 Config.TUTOR_VL_MODEL,
             )

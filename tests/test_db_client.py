@@ -67,7 +67,9 @@ def test_db_client_search(mock_env):
             mock_vectorstore.similarity_search.return_value = [mock_doc]
 
             # Mock _get_or_create_vectorstore to return our mock vectorstore
-            with patch.object(client, '_get_or_create_vectorstore', return_value=mock_vectorstore):
+            with patch.object(
+                client, "_get_or_create_vectorstore", return_value=mock_vectorstore
+            ):
                 results = client.search("test query", collection_name="test", k=5)
 
                 assert len(results) > 0
@@ -85,7 +87,9 @@ def test_db_client_get_stats(mock_env):
             mock_collection.count.return_value = 100
 
             client._chroma_client = MagicMock()
-            client._chroma_client.get_or_create_collection.return_value = mock_collection
+            client._chroma_client.get_or_create_collection.return_value = (
+                mock_collection
+            )
 
             stats = client.get_stats(collection_name="test")
 
@@ -106,9 +110,42 @@ def test_db_client_search_by_embedding(mock_env):
             }
 
             client._chroma_client = MagicMock()
-            client._chroma_client.get_or_create_collection.return_value = mock_collection
+            client._chroma_client.get_or_create_collection.return_value = (
+                mock_collection
+            )
 
-            results = client.search_by_embedding([0.1, 0.2], collection_name="test", k=3)
+            results = client.search_by_embedding(
+                [0.1, 0.2], collection_name="test", k=3
+            )
 
             assert len(results) == 1
             assert results[0][0] == "result 1"
+
+
+def test_db_client_get_records_by_metadata(mock_env):
+    with patch("chromadb.PersistentClient"):
+        with patch("src.infrastructure.db_client.DashScopeEmbeddings"):
+            client = DBClient(persist_dir="./chroma_db_test")
+            mock_collection = MagicMock()
+            mock_collection.get.return_value = {
+                "documents": ["上一条", "命中消息", "下一条"],
+                "metadatas": [
+                    {"conversation_id": "chat-1", "message_index": 1},
+                    {"conversation_id": "chat-1", "message_index": 2},
+                    {"conversation_id": "chat-1", "message_index": 3},
+                ],
+            }
+            client._chroma_client = MagicMock()
+            client._chroma_client.get_or_create_collection.return_value = (
+                mock_collection
+            )
+            where = {"conversation_id": {"$eq": "chat-1"}}
+
+            results = client.get_records("persona", where=where, limit=3)
+
+            assert [item[0] for item in results] == ["上一条", "命中消息", "下一条"]
+            mock_collection.get.assert_called_once_with(
+                include=["documents", "metadatas"],
+                where=where,
+                limit=3,
+            )

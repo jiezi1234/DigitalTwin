@@ -5,7 +5,7 @@ CSV 文件加载器（用于微信聊天记录）
 import os
 import csv
 import logging
-from typing import List
+from typing import Dict, List, Union
 from src.loaders.base import DataLoader
 from src.infrastructure.document import Document
 from src.infrastructure.telemetry import get_tracer
@@ -99,19 +99,34 @@ class WeChatCSVLoader(DataLoader):
         self.filepath = filepath
         self.encoding = encoding
 
+    @staticmethod
+    def _normalize_chat_time(value: object) -> Union[int, str]:
+        """将数字时间戳保存为整数，其余时间格式保留原文。"""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return int(float(text))
+        except ValueError:
+            return text
+
     def _should_skip(self, msg: str, type_name: str = "") -> bool:
         """判断是否跳过该消息 (过滤表情、系统提示、过短消息等)"""
         if not msg:
             return True
         msg = msg.strip()
-        
+
         # 基础过滤规则 (同步自 preprocess_csv.py)
-        if (len(msg) <= 2 or 
-            msg.startswith('[') or 
-            msg.startswith('表情') or
-            '动画表情' in type_name or
-            msg == "I've accepted your friend request. Now let's chat!" or
-            '<msg>' in msg):
+        # 中文口语中大量有效回复只有两个字，例如“你好”“可以”“收到”。
+        # 只过滤单字符噪声，避免清洗阶段损失人物语言风格。
+        if (
+            len(msg) <= 1
+            or msg.startswith("[")
+            or msg.startswith("表情")
+            or "动画表情" in type_name
+            or msg == "I've accepted your friend request. Now let's chat!"
+            or "<msg>" in msg
+        ):
             return True
         return False
 
@@ -119,51 +134,63 @@ class WeChatCSVLoader(DataLoader):
         """加载并解析微信 CSV 文件"""
         with tracer.start_as_current_span("wechat_loader.load") as span:
             span.set_attribute("loader.filepath", self.filepath)
-            
+
             documents = []
+            conversation_offsets: Dict[str, int] = {}
+            source_file = os.path.basename(self.filepath)
             try:
                 with open(self.filepath, "r", encoding=self.encoding) as f:
                     reader = csv.DictReader(f)
-                    
+
                     for row in reader:
                         # 必须字段
                         content = row.get("msg") or row.get("message") or ""
                         talker = row.get("talker") or "unknown"
                         is_sender = str(row.get("is_sender", "0"))
-                        
+
                         # 转换 is_sender 为整数 (1=自己, 0=他人)
                         try:
                             is_sender_int = int(is_sender)
                         except ValueError:
-                            is_sender_int = 1 if is_sender.lower() in ("true", "self", "1") else 0
+                            is_sender_int = (
+                                1 if is_sender.lower() in ("true", "self", "1") else 0
+                            )
 
                         # 数据清洗
                         type_name = row.get("type_name", "")
                         if self._should_skip(content, type_name):
                             continue
 
-                        # 合并元数据
+                        room = row.get("room_name") or row.get("room") or ""
+                        conversation_scope = room or "direct"
+                        conversation_id = f"{source_file}::{conversation_scope}"
+                        message_index = conversation_offsets.get(conversation_id, 0)
+                        conversation_offsets[conversation_id] = message_index + 1
+
+                        # 会话 ID 和消息序号用于检索后的时间邻域扩展。
                         metadata = {
                             "talker": talker,
                             "is_sender": is_sender_int,
-                            "chat_time": row.get("CreateTime") or row.get("chat_time") or "",
-                            "room": row.get("room_name") or row.get("room") or "",
+                            "chat_time": self._normalize_chat_time(
+                                row.get("CreateTime") or row.get("chat_time")
+                            ),
+                            "room": room,
+                            "conversation_id": conversation_id,
+                            "message_index": message_index,
                             "source": "wechat_csv",
-                            "source_file": os.path.basename(self.filepath)
+                            "source_file": source_file,
                         }
 
                         # 格式化内容 (用于向量搜索): "talker: msg" 或 "talker@room: msg"
-                        room = metadata["room"]
                         display_name = f"{talker}@{room}" if room else talker
                         formatted_content = f"{display_name}: {content.strip()}"
 
-                        doc = Document(
-                            content=formatted_content,
-                            metadata=metadata
-                        )
+                        doc = Document(content=formatted_content, metadata=metadata)
                         documents.append(doc)
 
-                logger.info(f"WeChatLoader: 从 {self.filepath} 加载了 {len(documents)} 条有效记录")
+                logger.info(
+                    f"WeChatLoader: 从 {self.filepath} 加载了 {len(documents)} 条有效记录"
+                )
                 span.set_attribute("loader.documents_loaded", len(documents))
 
             except Exception as e:

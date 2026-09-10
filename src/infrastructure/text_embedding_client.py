@@ -102,6 +102,13 @@ class TextEmbeddingClient:
 
         return []
 
+    def embed_query(self, text: str, max_retries: int = 5) -> List[float]:
+        """为单条检索查询生成文本向量。"""
+        vectors = self.embed_texts([text], max_retries=max_retries)
+        if not vectors:
+            raise ValueError("文本 Embedding API 未返回查询向量")
+        return vectors[0]
+
     @staticmethod
     def _is_retryable_http_status(status_code: int) -> bool:
         return status_code == 429 or 500 <= status_code < 600

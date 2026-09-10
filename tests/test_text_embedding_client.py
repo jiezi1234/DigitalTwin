@@ -70,3 +70,13 @@ def test_text_embedding_client_no_retry_on_400(mock_env):
     with patch("requests.post", return_value=bad_request_response):
         with pytest.raises(requests.HTTPError):
             client.embed_texts(["hello"])
+
+
+def test_text_embedding_client_embed_query(mock_env):
+    client = TextEmbeddingClient(api_base="https://api.example.com")
+
+    with patch.object(client, "embed_texts", return_value=[[0.1, 0.2]]) as embed_texts:
+        result = client.embed_query("数据库事务")
+
+    assert result == [0.1, 0.2]
+    embed_texts.assert_called_once_with(["数据库事务"], max_retries=5)

@@ -3,13 +3,27 @@
 支持指代消解、Query Rewriting 等处理策略
 """
 
+import json
 import logging
-from typing import Optional, Dict, Any, List
+import re
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, List, Literal
 from src.infrastructure.llm_client import LLMClient
 from src.infrastructure.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
+_JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
+
+
+@dataclass(frozen=True)
+class QueryUnderstanding:
+    """结构化查询理解结果，供检索与后续元数据过滤复用。"""
+
+    original_query: str
+    standalone_query: str
+    entities: List[str] = field(default_factory=list)
+    time_range: Optional[Dict[str, str]] = None
 
 
 class QueryProcessor:
@@ -20,6 +34,8 @@ class QueryProcessor:
         llm_client: LLMClient,
         enable_coreference_resolution: bool = True,
         enable_query_rewriting: bool = True,
+        domain: Literal["persona", "textbook"] = "persona",
+        history_messages: int = 6,
     ):
         """
         初始化查询处理器
@@ -28,10 +44,155 @@ class QueryProcessor:
             llm_client: LLM 客户端
             enable_coreference_resolution: 是否启用指代消解
             enable_query_rewriting: 是否启用查询改写
+            domain: 查询所属领域，人物对话或教材知识库
+            history_messages: 查询理解读取的最近会话消息数
         """
         self.llm_client = llm_client
         self.enable_coreference_resolution = enable_coreference_resolution
         self.enable_query_rewriting = enable_query_rewriting
+        self.domain = domain
+        self.history_messages = max(0, history_messages)
+
+    def _format_history(
+        self,
+        conversation: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, str]]:
+        """截取并清洗最近会话，避免把无限历史注入查询理解提示词。"""
+        if not conversation or self.history_messages == 0:
+            return []
+
+        history: List[Dict[str, str]] = []
+        for message in conversation[-self.history_messages :]:
+            role = str(message.get("role", "unknown"))
+            content = str(message.get("content", "")).strip()
+            if content:
+                history.append({"role": role, "content": content[:500]})
+        return history
+
+    def _build_understanding_prompt(
+        self,
+        query: str,
+        persona: Optional[Dict[str, Any]],
+        conversation: Optional[List[Dict[str, Any]]],
+    ) -> str:
+        history = self._format_history(conversation)
+        task_parts = []
+        if self.enable_coreference_resolution:
+            task_parts.append("结合最近会话消解代词、省略和上下文指代")
+        if self.enable_query_rewriting:
+            task_parts.append("将问题改写为适合语义检索的独立查询")
+
+        if self.domain == "textbook":
+            domain_instruction = (
+                "场景是课程教材问答。保留专业实体、约束条件、页码以及中英文术语，"
+                "可以补充必要的同义词或上位概念，但不要回答问题。"
+            )
+            persona_context: Dict[str, Any] = {}
+        else:
+            domain_instruction = (
+                "场景是人物聊天记忆检索。保留人物、事件、地点、时间和口语表达，"
+                "不要把未知事实补写进查询。"
+            )
+            active_persona = persona or {}
+            persona_context = {
+                "name": active_persona.get("name", ""),
+                "system_prompt": str(active_persona.get("system_prompt", ""))[:200],
+            }
+
+        payload = {
+            "domain": self.domain,
+            "persona": persona_context,
+            "conversation": history,
+            "query": query,
+        }
+        return (
+            "你是RAG系统的查询理解模块。"
+            + "；".join(task_parts)
+            + "。\n"
+            + domain_instruction
+            + "\n只输出合法JSON，不要解释，不要输出Markdown代码块。格式为：\n"
+            + '{"standalone_query":"...","entities":["..."],'
+            + '"time_range":{"start":"...","end":"..."}}\n'
+            + "无法确定时间范围时将time_range设为null；没有实体时entities为空数组。\n"
+            + f"输入：{json.dumps(payload, ensure_ascii=False)}"
+        )
+
+    @staticmethod
+    def _parse_understanding(query: str, raw: Optional[str]) -> QueryUnderstanding:
+        """解析结构化结果；兼容旧的纯文本改写响应。"""
+        text = (raw or "").strip()
+        if not text:
+            return QueryUnderstanding(original_query=query, standalone_query=query)
+
+        match = _JSON_OBJECT.search(text)
+        if match:
+            try:
+                payload = json.loads(match.group(0))
+                standalone_query = (
+                    str(payload.get("standalone_query", "")).strip() or query
+                )
+                raw_entities = payload.get("entities", [])
+                entities = (
+                    [str(item).strip() for item in raw_entities if str(item).strip()]
+                    if isinstance(raw_entities, list)
+                    else []
+                )
+                raw_time_range = payload.get("time_range")
+                time_range = None
+                if isinstance(raw_time_range, dict):
+                    cleaned = {
+                        str(key): str(value).strip()
+                        for key, value in raw_time_range.items()
+                        if value is not None and str(value).strip()
+                    }
+                    time_range = cleaned or None
+                return QueryUnderstanding(
+                    original_query=query,
+                    standalone_query=standalone_query,
+                    entities=entities,
+                    time_range=time_range,
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("查询理解响应不是合法JSON，回退到纯文本结果")
+
+        return QueryUnderstanding(original_query=query, standalone_query=text)
+
+    def understand(
+        self,
+        query: str,
+        persona: Optional[Dict[str, Any]] = None,
+        conversation: Optional[List[Dict[str, Any]]] = None,
+    ) -> QueryUnderstanding:
+        """用一次模型调用完成历史感知的指代消解与查询改写。"""
+        if not self.enable_coreference_resolution and not self.enable_query_rewriting:
+            return QueryUnderstanding(original_query=query, standalone_query=query)
+
+        with tracer.start_as_current_span("query.understand") as span:
+            span.set_attribute("query.domain", self.domain)
+            span.set_attribute(
+                "query.history_messages", len(self._format_history(conversation))
+            )
+            try:
+                raw = self.llm_client.call(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": self._build_understanding_prompt(
+                                query, persona, conversation
+                            ),
+                        }
+                    ],
+                    temperature=0.0,
+                    max_tokens=300,
+                )
+                result = self._parse_understanding(query, raw)
+                span.set_attribute("query.changed", result.standalone_query != query)
+                span.set_attribute("query.entities_count", len(result.entities))
+                return result
+            except Exception as exc:
+                logger.warning("历史感知查询理解失败，回退到原查询: %s", exc)
+                span.record_exception(exc)
+                return QueryUnderstanding(original_query=query, standalone_query=query)
 
     def resolve_coreference(
         self, query: str, persona: Optional[Dict[str, Any]] = None
@@ -105,16 +266,28 @@ class QueryProcessor:
             return query
 
         with tracer.start_as_current_span("query.rewriting") as span:
-            persona_name = (persona or {}).get("name", "")
-            system_prompt = (persona or {}).get("system_prompt", "")
-            doc_count = (persona or {}).get("doc_count", 0)
+            if self.domain == "textbook":
+                prompt = f"""你的任务是改写教材问答查询，使其更容易从课程教材中检索相关内容。
 
-            persona_context = f"""分身信息：
+保留原问题的专业实体、约束条件和术语，并补充必要的同义词或上位概念。
+例如：
+- "ACID是什么？" 可改写为：数据库事务 ACID 原子性 一致性 隔离性 持久性
+- "怎么建索引？" 可改写为：数据库索引 创建索引 CREATE INDEX 使用方法
+
+原问题：{query}
+
+请直接输出适合语义检索的查询，不要回答问题，不要添加说明。"""
+            else:
+                persona_name = (persona or {}).get("name", "")
+                system_prompt = (persona or {}).get("system_prompt", "")
+                doc_count = (persona or {}).get("doc_count", 0)
+
+                persona_context = f"""分身信息：
 - 名字：{persona_name}
 - 已导入聊天记录数：{doc_count}条
 - 角色设定：{system_prompt[:200] if system_prompt else "未设定"}"""
 
-            prompt = f"""{persona_context}
+                prompt = f"""{persona_context}
 
 你的任务是改写用户的问题，使其更容易从分身的聊天历史中检索相关内容。
 
@@ -148,7 +321,10 @@ class QueryProcessor:
             return query
 
     def process(
-        self, query: str, persona: Optional[Dict[str, Any]] = None
+        self,
+        query: str,
+        persona: Optional[Dict[str, Any]] = None,
+        conversation: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         处理查询（完整流程）
@@ -156,6 +332,7 @@ class QueryProcessor:
         Args:
             query: 原始查询
             persona: 分身信息
+            conversation: 最近会话历史
 
         Returns:
             处理后的查询
@@ -163,13 +340,10 @@ class QueryProcessor:
         with tracer.start_as_current_span("query.process") as span:
             span.set_attribute("query.original", query[:100])
 
-            # 步骤 1：指代消解
-            if self.enable_coreference_resolution:
-                query = self.resolve_coreference(query, persona)
-
-            # 步骤 2：Query Rewriting
-            if self.enable_query_rewriting:
-                query = self.rewrite_query(query, persona)
-
-            span.set_attribute("query.processed", query[:100])
-            return query
+            result = self.understand(
+                query=query,
+                persona=persona,
+                conversation=conversation,
+            )
+            span.set_attribute("query.processed", result.standalone_query[:100])
+            return result.standalone_query

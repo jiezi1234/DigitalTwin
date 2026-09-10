@@ -1,6 +1,6 @@
 """
 微信聊天记录导入脚本 (交互式)
-使用方式: python import_wechat_csv.py
+使用方式: python -m src.cli.import_wechat_csv
 """
 
 import os

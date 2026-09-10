@@ -1,0 +1,2 @@
+{"id":"chat-001","query":"我以前说过最喜欢什么运动？","persona":{"name":"示例人物","doc_count":10000},"relevant":[{"source_file":"example.csv","content_contains":"羽毛球"}]}
+{"id":"chat-002","query":"上次旅行去了哪里？","persona":{"name":"示例人物","doc_count":10000},"relevant":[{"source_file":"example.csv","content_contains":"杭州"}]}
