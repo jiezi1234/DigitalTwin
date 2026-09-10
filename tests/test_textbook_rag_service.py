@@ -95,3 +95,20 @@ def test_textbook_retrieve_uses_recent_conversation_for_query_understanding():
     mm_client.embed_query.assert_called_once_with("数据库事务的ACID特性是什么")
     prompt = service.llm_client.call.call_args.kwargs["messages"][0]["content"]
     assert "什么是数据库事务" in prompt
+
+
+def test_textbook_context_keeps_selected_results_aligned_with_citations():
+    service, _, _, _ = make_service()
+    results = [
+        ("重复内容", {"source_file": "book.pdf", "page": 1}, 0.9),
+        ("重复内容。", {"source_file": "scan.pdf", "page": 2}, 0.8),
+        ("不同内容", {"source_file": "book.pdf", "page": 3}, 0.7),
+    ]
+
+    built = service.build_context(results)
+
+    assert [item[1]["page"] for item in built.selected_results] == [1, 3]
+    assert "[1]" in built.text
+    assert "[2]" in built.text
+    sources = service.get_sources(built.selected_results, reply="参考[2]")
+    assert sources[0]["page"] == 3

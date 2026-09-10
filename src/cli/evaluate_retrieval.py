@@ -14,6 +14,7 @@ from src.infrastructure.llm_client import LLMClient
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
+from src.rag.context_builder import ContextBuilder
 from src.rag.query_processor import QueryProcessor
 from src.rag.rag_engine import RAGEngine
 
@@ -62,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="关闭优化组的结构化时间范围过滤",
     )
+    parser.add_argument(
+        "--no-context-optimization",
+        action="store_true",
+        help="关闭优化组的上下文去重、片段预算与安全截断",
+    )
     return parser
 
 
@@ -94,6 +100,7 @@ def main() -> None:
         os.getenv("RAG_METADATA_FILTERING_ENABLED", "true").lower() == "true"
         and not args.no_metadata_filtering
     )
+    context_optimization_enabled = not args.no_context_optimization
     bm25_retriever = BM25Retriever(db_client) if hybrid_search_enabled else None
     reranker = (
         LLMReranker(
@@ -113,6 +120,10 @@ def main() -> None:
             )
             if metadata_filtering_enabled
             else None
+        ),
+        context_builder=ContextBuilder(
+            max_record_chars=int(os.getenv("RAG_CONTEXT_RECORD_MAX_CHARS", "500")),
+            dedup_threshold=float(os.getenv("RAG_CONTEXT_DEDUP_THRESHOLD", "0.90")),
         ),
     )
     processor = QueryProcessor(
@@ -147,15 +158,23 @@ def main() -> None:
             metadata_filtering=metadata_filtering_enabled,
             persona=case.persona,
         )
-        if not neighbor_expansion_enabled:
-            return semantic_results
-        return engine.expand_chat_neighbors(
-            semantic_results,
-            collection_name=args.collection,
-            window_size=int(os.getenv("RAG_NEIGHBOR_WINDOW", "2")),
-            anchor_limit=int(os.getenv("RAG_NEIGHBOR_ANCHORS", "5")),
-            max_results=int(os.getenv("RAG_NEIGHBOR_MAX_RESULTS", "30")),
-        )
+        final_results = semantic_results
+        if neighbor_expansion_enabled:
+            final_results = engine.expand_chat_neighbors(
+                semantic_results,
+                collection_name=args.collection,
+                window_size=int(os.getenv("RAG_NEIGHBOR_WINDOW", "2")),
+                anchor_limit=int(os.getenv("RAG_NEIGHBOR_ANCHORS", "5")),
+                max_results=int(os.getenv("RAG_NEIGHBOR_MAX_RESULTS", "30")),
+            )
+        if context_optimization_enabled:
+            final_results = engine.build_context(
+                final_results,
+                max_context_length=int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "2000")),
+                include_metadata=True,
+                format_type="chat",
+            ).selected_results
+        return final_results
 
     optimized_features = ["mmr"]
     if rewriting_enabled:
@@ -166,6 +185,8 @@ def main() -> None:
         optimized_features.append("llm_rerank")
     if metadata_filtering_enabled:
         optimized_features.append("metadata_filter")
+    if context_optimization_enabled:
+        optimized_features.append("context_budget")
     if neighbor_expansion_enabled:
         optimized_features.append("neighbors")
 

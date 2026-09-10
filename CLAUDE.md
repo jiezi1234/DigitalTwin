@@ -15,6 +15,7 @@
 - 人物检索组合 Dense/MMR 与轻量中文 BM25，通过加权 RRF 融合并支持单通道降级
 - 混合召回后使用一次结构化 LLM 调用重排 Top-N 候选，失败时保留原排名
 - 查询理解产生的 ISO 时间范围通过统一过滤器下推到 Dense/MMR 与 BM25
+- 生成前统一执行上下文近重复去除、单片段限长与整体字符预算，教材引用只映射实际入选片段
 - 人物检索围绕语义命中消息按 conversation_id/message_index 扩展时间邻域并去重
 - 分层架构：Infrastructure → Loaders → RAG Engine → Services → API
 
@@ -79,6 +80,7 @@ DigitalTwin-Refactor/
 │   │   ├── bm25_retriever.py         # 中文友好的懒加载 BM25 检索器
 │   │   ├── llm_reranker.py            # 可降级的结构化 LLM 候选重排器
 │   │   ├── metadata_filter.py          # 查询时间范围到 Chroma 条件的转换
+│   │   ├── context_builder.py          # 上下文去重、预算、截断与入选统计
 │   │   ├── query_processor.py        # 历史感知查询理解（改写 / 指代消解）
 │   │   └── react_router.py           # ReAct 检索工具路由
 │   ├── services/                  # 业务服务层

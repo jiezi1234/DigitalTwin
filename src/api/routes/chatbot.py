@@ -71,6 +71,8 @@ def get_rag_service(persona):
             rerank_candidates=Config.RAG_RERANK_CANDIDATES,
             enable_metadata_filtering=Config.RAG_METADATA_FILTERING_ENABLED,
             timezone_offset=Config.RAG_TIMEZONE_OFFSET,
+            context_record_max_chars=Config.RAG_CONTEXT_RECORD_MAX_CHARS,
+            context_dedup_threshold=Config.RAG_CONTEXT_DEDUP_THRESHOLD,
             react_router=react_router,
             retrieval_enabled=Config.RAG_ENABLED,
             max_results=Config.RAG_MAX_RESULTS,

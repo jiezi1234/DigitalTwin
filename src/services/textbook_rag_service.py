@@ -12,10 +12,11 @@ from src.infrastructure.llm_client import LLMClient
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.rag.query_processor import QueryProcessor
+from src.rag.context_builder import ContextBuilder, ContextBuildResult
 
 logger = logging.getLogger(__name__)
 
-RE_CITE = re.compile(r'\[(\d+)\]')
+RE_CITE = re.compile(r"\[(\d+)\]")
 
 SearchResult = Tuple[str, Dict[str, Any], float]
 
@@ -34,6 +35,7 @@ class TextbookRAGService:
         query_history_messages: int = 6,
         mm_client: Optional[MultiModalEmbeddingClient] = None,
         text_embedding_client: Optional[TextEmbeddingClient] = None,
+        context_builder: Optional[ContextBuilder] = None,
     ):
         self.llm_client = llm_client
         self.db_client = db_client
@@ -41,10 +43,10 @@ class TextbookRAGService:
         self.image_collection_name = image_collection_name
         self.ocr_collection_name = ocr_collection_name
         self.mm_client = mm_client or MultiModalEmbeddingClient()
-        self.text_embedding_client = (
-            text_embedding_client
-            or (TextEmbeddingClient() if ocr_collection_name else None)
+        self.text_embedding_client = text_embedding_client or (
+            TextEmbeddingClient() if ocr_collection_name else None
         )
+        self.context_builder = context_builder or ContextBuilder()
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
             enable_coreference_resolution=False,
@@ -81,7 +83,9 @@ class TextbookRAGService:
         ocr_text_results: List[SearchResult] = []
         if self.ocr_collection_name and self.text_embedding_client:
             try:
-                ocr_query_embedding = self.text_embedding_client.embed_query(processed_query)
+                ocr_query_embedding = self.text_embedding_client.embed_query(
+                    processed_query
+                )
                 ocr_text_results = self.db_client.search_by_embedding(
                     embedding=ocr_query_embedding,
                     collection_name=self.ocr_collection_name,
@@ -181,25 +185,25 @@ class TextbookRAGService:
         max_context_length: int = 2000,
         include_metadata: bool = True,
     ) -> str:
-        if not results:
-            return ""
+        return self.build_context(
+            results,
+            max_context_length=max_context_length,
+            include_metadata=include_metadata,
+        ).text
 
-        lines: List[str] = []
-        total_length = 0
-
-        for idx, (content, metadata, _) in enumerate(results, 1):
-            source_file = metadata.get("source_file", "")
-            page = metadata.get("page", "")
-            location_parts = [part for part in [source_file, f"第{page}页" if page else ""] if part]
-            location = " > ".join(location_parts)
-            record = f"[{idx}]【{location}】\n{content.strip()}\n" if include_metadata else f"[{idx}] {content.strip()}"
-
-            if total_length + len(record) > max_context_length:
-                break
-            lines.append(record)
-            total_length += len(record)
-
-        return "\n".join(lines)
+    def build_context(
+        self,
+        results: List[SearchResult],
+        max_context_length: int = 2000,
+        include_metadata: bool = True,
+    ) -> ContextBuildResult:
+        """构建教材上下文，并保留与引用编号一致的实际入选结果。"""
+        return self.context_builder.build(
+            results=results,
+            max_context_length=max_context_length,
+            include_metadata=include_metadata,
+            format_type="textbook",
+        )
 
     def format_image_context(
         self,
@@ -226,21 +230,25 @@ class TextbookRAGService:
     ) -> List[Dict[str, Any]]:
         images = []
         for idx, (_, metadata, score) in enumerate(image_results, 1):
-            images.append({
-                "image_ref": f"图{idx}",
-                "image_url": metadata.get("image_url"),
-                "image_path": metadata.get("image_path"),
-                "source_file": metadata.get("source_file"),
-                "page": metadata.get("page"),
-                "bbox": self._parse_bbox(metadata.get("bbox")),
-                "nearby_text": metadata.get("nearby_text", ""),
-                "score": round(score, 4),
-            })
+            images.append(
+                {
+                    "image_ref": f"图{idx}",
+                    "image_url": metadata.get("image_url"),
+                    "image_path": metadata.get("image_path"),
+                    "source_file": metadata.get("source_file"),
+                    "page": metadata.get("page"),
+                    "bbox": self._parse_bbox(metadata.get("bbox")),
+                    "nearby_text": metadata.get("nearby_text", ""),
+                    "score": round(score, 4),
+                }
+            )
         return images
 
     def get_stats(self) -> Dict[str, Any]:
         text_stats = self.db_client.get_stats(collection_name=self.text_collection_name)
-        image_stats = self.db_client.get_stats(collection_name=self.image_collection_name)
+        image_stats = self.db_client.get_stats(
+            collection_name=self.image_collection_name
+        )
         ocr_stats = (
             self.db_client.get_stats(collection_name=self.ocr_collection_name)
             if self.ocr_collection_name
@@ -284,12 +292,14 @@ class TextbookRAGService:
                 continue
             seen.add(key)
 
-            sources.append({
-                "source_file": source_file,
-                "chapter": meta.get("chapter", ""),
-                "section": meta.get("section", ""),
-                "page": page,
-            })
+            sources.append(
+                {
+                    "source_file": source_file,
+                    "chapter": meta.get("chapter", ""),
+                    "section": meta.get("section", ""),
+                    "page": page,
+                }
+            )
 
             if len(sources) >= 5:
                 break

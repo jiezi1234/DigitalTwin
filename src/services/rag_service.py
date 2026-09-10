@@ -6,6 +6,7 @@ from src.rag.rag_engine import RAGEngine
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
+from src.rag.context_builder import ContextBuilder
 from src.rag.query_processor import QueryProcessor
 from src.rag.react_router import ReActRetrievalRouter
 from src.infrastructure.telemetry import get_tracer
@@ -41,6 +42,9 @@ class RAGService:
         reranker: Optional[LLMReranker] = None,
         enable_metadata_filtering: bool = False,
         timezone_offset: str = "+08:00",
+        context_record_max_chars: int = 500,
+        context_dedup_threshold: float = 0.90,
+        context_builder: Optional[ContextBuilder] = None,
         react_router: Optional[ReActRetrievalRouter] = None,
         retrieval_enabled: bool = True,
         max_results: int = 15,
@@ -73,6 +77,9 @@ class RAGService:
             reranker: 可注入的候选重排器
             enable_metadata_filtering: 是否应用查询理解产生的时间约束
             timezone_offset: 无时区日期采用的 UTC 偏移
+            context_record_max_chars: 单条上下文片段最大字符数
+            context_dedup_threshold: 上下文近重复判定阈值
+            context_builder: 可注入的上下文构建器
             react_router: 可选的 ReAct 检索工具路由器
             retrieval_enabled: 是否允许调用检索工具
             max_results: 单次检索的最大结果数
@@ -117,11 +124,16 @@ class RAGService:
             if self.enable_metadata_filtering
             else None
         )
+        active_context_builder = context_builder or ContextBuilder(
+            max_record_chars=context_record_max_chars,
+            dedup_threshold=context_dedup_threshold,
+        )
         self.rag_engine = RAGEngine(
             db_client=db_client,
             lexical_retriever=lexical_retriever,
             reranker=active_reranker,
             metadata_filter_builder=metadata_filter_builder,
+            context_builder=active_context_builder,
         )
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
@@ -241,15 +253,13 @@ class RAGService:
                 )
             else:
                 results = []
-            context_text = (
-                self.format_context(
-                    results,
-                    max_context_length=self.max_context_length,
-                    include_metadata=self.include_metadata,
-                )
-                if results
-                else ""
+            context_build = self.rag_engine.build_context(
+                results,
+                max_context_length=self.max_context_length,
+                include_metadata=self.include_metadata,
+                format_type="chat",
             )
+            context_text = context_build.text
             retrieval_stats = {
                 "route_mode": route_mode,
                 "action": action,
@@ -264,6 +274,10 @@ class RAGService:
                     metadata.get("metadata_filter_applied", False)
                     for _, metadata, _ in results
                 ),
+                "context_selected_count": context_build.selected_count,
+                "context_duplicate_count": context_build.duplicate_count,
+                "context_truncated_count": context_build.truncated_count,
+                "context_used_chars": context_build.used_chars,
                 "result_count": len(results),
                 "semantic_result_count": semantic_result_count,
                 "neighbor_count": sum(

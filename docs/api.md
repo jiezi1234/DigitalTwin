@@ -372,6 +372,7 @@ class RAGEngine:
         lexical_retriever: Optional[BM25Retriever] = None,
         reranker: Optional[LLMReranker] = None,
         metadata_filter_builder: Optional[MetadataFilterBuilder] = None,
+        context_builder: Optional[ContextBuilder] = None,
     ):
         """
         Args:
@@ -379,6 +380,7 @@ class RAGEngine:
             lexical_retriever: 可选的 BM25 关键词检索器
             reranker: 可选的 LLM 候选重排器
             metadata_filter_builder: 可选的结构化时间过滤器
+            context_builder: 可选的上下文预算与去重构建器
         """
 
     def search(
@@ -477,6 +479,8 @@ class RAGService:
         rerank_candidates: int = 20,
         enable_metadata_filtering: bool = False,
         timezone_offset: str = "+08:00",
+        context_record_max_chars: int = 500,
+        context_dedup_threshold: float = 0.90,
         react_router: Optional[ReActRetrievalRouter] = None,
     ):
         """
@@ -494,6 +498,8 @@ class RAGService:
             rerank_candidates: 单次重排候选数
             enable_metadata_filtering: 启用结构化时间过滤
             timezone_offset: 日期边界采用的 UTC 偏移
+            context_record_max_chars: 单个上下文片段最大字符数
+            context_dedup_threshold: 近重复片段判定阈值
             react_router: 可选的 ReAct 检索工具路由器
         """
 
@@ -589,6 +595,8 @@ RAG_RERANK_MODEL=qwen-turbo    # 重排模型
 RAG_RERANK_CANDIDATES=20       # 单次重排候选数
 RAG_METADATA_FILTERING_ENABLED=true # 启用结构化时间过滤
 RAG_TIMEZONE_OFFSET=+08:00     # 无时区日期使用的 UTC 偏移
+RAG_CONTEXT_RECORD_MAX_CHARS=500 # 单片段字符上限
+RAG_CONTEXT_DEDUP_THRESHOLD=0.90 # 近重复判定阈值
 
 # 数据库配置
 CHROMA_PERSIST_DIR=./chroma_db # ChromaDB 持久化目录

@@ -8,6 +8,7 @@ from src.infrastructure.db_client import DBClient
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
+from src.rag.context_builder import ContextBuilder, ContextBuildResult
 from src.rag.query_processor import QueryProcessor
 from src.infrastructure.telemetry import get_tracer
 
@@ -24,6 +25,7 @@ class RAGEngine:
         lexical_retriever: Optional[BM25Retriever] = None,
         reranker: Optional[LLMReranker] = None,
         metadata_filter_builder: Optional[MetadataFilterBuilder] = None,
+        context_builder: Optional[ContextBuilder] = None,
     ):
         """
         初始化 RAG 引擎
@@ -33,11 +35,13 @@ class RAGEngine:
             lexical_retriever: 可选的关键词检索器
             reranker: 可选的候选重排器
             metadata_filter_builder: 可选的结构化元数据过滤器
+            context_builder: 可选的上下文构建器
         """
         self.db_client = db_client
         self.lexical_retriever = lexical_retriever
         self.reranker = reranker
         self.metadata_filter_builder = metadata_filter_builder
+        self.context_builder = context_builder or ContextBuilder()
 
     def search(
         self,
@@ -266,76 +270,28 @@ class RAGEngine:
         include_metadata: bool = True,
         format_type: str = "chat",  # "chat" 或 "textbook"
     ) -> str:
-        """
-        格式化搜索结果为上下文字符串
+        """格式化搜索结果；兼容原接口。"""
+        return self.build_context(
+            results=results,
+            max_context_length=max_context_length,
+            include_metadata=include_metadata,
+            format_type=format_type,
+        ).text
 
-        Args:
-            results: 搜索结果列表
-            max_context_length: 最大上下文长度
-            include_metadata: 是否包含元数据
-            format_type: 格式化类型（chat 或 textbook）
-
-        Returns:
-            格式化的上下文字符串
-        """
-        with tracer.start_as_current_span("format.context") as span:
-            span.set_attribute("format.type", format_type)
-            span.set_attribute("format.num_results", len(results))
-
-            if not results:
-                return ""
-
-            lines = []
-            total_length = 0
-
-            for content, metadata, score in results:
-                if format_type == "chat":
-                    # 聊天记录格式
-                    if include_metadata:
-                        talker = metadata.get("talker", "未知")
-                        chat_time = metadata.get("chat_time_str") or metadata.get(
-                            "chat_time", ""
-                        )
-                        time_prefix = f"[{chat_time}] " if chat_time else ""
-                        record = f"{time_prefix}{talker}: {content.strip()}"
-                    else:
-                        record = content.strip()
-
-                elif format_type == "textbook":
-                    # 教材格式（带编号，供 LLM 引用）
-                    idx = len(lines) + 1
-                    if include_metadata:
-                        source_file = metadata.get("source_file", "")
-                        chapter = metadata.get("chapter", "")
-                        section = metadata.get("section", "")
-                        page = metadata.get("page", "")
-
-                        location_parts = []
-                        if source_file:
-                            location_parts.append(source_file)
-                        if chapter:
-                            location_parts.append(chapter)
-                        if section:
-                            location_parts.append(section)
-                        if page:
-                            location_parts.append(f"第{page}页")
-
-                        location = " > ".join(location_parts) if location_parts else ""
-                        record = f"[{idx}]【{location}】\n{content.strip()}\n"
-                    else:
-                        record = f"[{idx}] {content.strip()}"
-
-                else:
-                    # 默认格式
-                    record = content.strip()
-
-                if total_length + len(record) > max_context_length:
-                    break
-
-                lines.append(record)
-                total_length += len(record)
-
-            return "\n".join(lines)
+    def build_context(
+        self,
+        results: List[Tuple[str, Dict[str, Any], float]],
+        max_context_length: int = 2000,
+        include_metadata: bool = True,
+        format_type: str = "chat",
+    ) -> ContextBuildResult:
+        """构建上下文并返回实际入选结果及预算统计。"""
+        return self.context_builder.build(
+            results=results,
+            max_context_length=max_context_length,
+            include_metadata=include_metadata,
+            format_type=format_type,
+        )
 
     @staticmethod
     def _chat_record_key(content: str, metadata: Dict[str, Any]) -> Tuple[Any, ...]:

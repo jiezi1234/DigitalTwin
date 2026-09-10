@@ -32,7 +32,9 @@ def load_evaluation_cases(path: str) -> List[EvaluationCase]:
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"评测集第 {line_number} 行不是合法 JSON: {exc}") from exc
+                raise ValueError(
+                    f"评测集第 {line_number} 行不是合法 JSON: {exc}"
+                ) from exc
 
             query = str(payload.get("query", "")).strip()
             relevant = payload.get("relevant")
@@ -90,6 +92,7 @@ class RetrievalEvaluator:
         hit_count = 0
         reciprocal_ranks: List[float] = []
         recalls: List[float] = []
+        context_precisions: List[float] = []
         latencies_ms: List[float] = []
         details: List[Dict[str, Any]] = []
 
@@ -101,17 +104,25 @@ class RetrievalEvaluator:
 
             matched_label_indices = set()
             first_relevant_rank: Optional[int] = None
+            relevant_result_count = 0
             for rank, (content, metadata, _) in enumerate(results, 1):
+                result_is_relevant = False
                 for label_index, label in enumerate(case.relevant):
                     if self._matches(content, metadata or {}, label):
                         matched_label_indices.add(label_index)
+                        result_is_relevant = True
                         if first_relevant_rank is None:
                             first_relevant_rank = rank
+                relevant_result_count += int(result_is_relevant)
 
             hit = first_relevant_rank is not None
             hit_count += int(hit)
-            reciprocal_ranks.append(1.0 / first_relevant_rank if first_relevant_rank else 0.0)
+            reciprocal_ranks.append(
+                1.0 / first_relevant_rank if first_relevant_rank else 0.0
+            )
             recalls.append(len(matched_label_indices) / len(case.relevant))
+            context_precision = relevant_result_count / len(results) if results else 0.0
+            context_precisions.append(context_precision)
             details.append(
                 {
                     "id": case.case_id,
@@ -120,6 +131,8 @@ class RetrievalEvaluator:
                     "matched_labels": len(matched_label_indices),
                     "relevant_labels": len(case.relevant),
                     "returned": len(results),
+                    "relevant_results": relevant_result_count,
+                    "context_precision": context_precision,
                     "latency_ms": round(latency_ms, 3),
                 }
             )
@@ -133,6 +146,7 @@ class RetrievalEvaluator:
                 f"hit_rate@{self.k}": hit_count / len(case_list),
                 f"mrr@{self.k}": statistics.fmean(reciprocal_ranks),
                 f"recall@{self.k}": statistics.fmean(recalls),
+                f"context_precision@{self.k}": statistics.fmean(context_precisions),
                 "latency_ms_mean": statistics.fmean(latencies_ms),
                 "latency_ms_p50": self._percentile(latencies_ms, 0.50),
                 "latency_ms_p95": self._percentile(latencies_ms, 0.95),
@@ -163,12 +177,20 @@ class RetrievalEvaluator:
         case_list = list(cases)
         baseline = self.evaluate(case_list, baseline_retriever, "baseline_similarity")
         optimized = self.evaluate(case_list, optimized_retriever, optimized_run_name)
-        hit_key = f"hit_rate@{self.k}"
+        metric_keys = (
+            f"hit_rate@{self.k}",
+            f"mrr@{self.k}",
+            f"recall@{self.k}",
+            f"context_precision@{self.k}",
+        )
         return {
             "baseline": baseline,
             "optimized": optimized,
             "delta": {
-                hit_key: optimized["metrics"][hit_key] - baseline["metrics"][hit_key],
+                **{
+                    key: optimized["metrics"][key] - baseline["metrics"][key]
+                    for key in metric_keys
+                },
                 "improved_cases": [
                     optimized_case["id"]
                     for baseline_case, optimized_case in zip(

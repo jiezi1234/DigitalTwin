@@ -57,6 +57,7 @@ _FULL_SPANS = _LIGHT_SPANS | {
     "db.connect",
     "db.metadata_get",
     "format.context",
+    "context.build",
 }
 
 

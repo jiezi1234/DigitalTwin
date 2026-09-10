@@ -10,6 +10,7 @@ DigitalTwin 是一个面向两类场景的 RAG 交互系统：使用微信聊天
 - 混合召回：使用 Dense/MMR 与轻量中文 BM25 双路召回，通过加权 RRF 融合排名；单通道异常时自动降级。
 - 候选重排：用一次结构化 LLM 调用重排首轮 Top-N 候选，记录重排前后的分数与名次，解析失败时保持原排名。
 - 时间约束检索：把“去年”“某月之后”等显式时间条件规范化为 ISO 日期，并下推为 Chroma 与 BM25 共用的范围过滤。
+- 上下文预算：对召回片段做规范化去重、近重复检测、单片段限长与句界截断，并保留教材引用编号和实际来源的一致性。
 - 时间邻域扩展：语义命中聊天消息后，按会话 ID 和消息序号补齐前后消息，恢复完整对话语境。
 - 教材问答：并行召回多模态文本、OCR 文本和教材图片；使用 RRF 融合两个文本排序。
 - 图文回答：将命中图片交给视觉语言模型，并通过 `[图1]` 等标记嵌入前端回答。
@@ -27,7 +28,7 @@ Flask API（人物对话 / 数字助教）
         ▼
 Service（RAGService / TextbookRAGService）
         │
-        ├── 人物对话：ReAct 路由 → 查询理解/时间过滤 → 混合召回 → RRF → LLM 重排 → 时间邻域扩展
+        ├── 人物对话：路由 → 查询理解/过滤 → 混合召回 → 重排/邻域 → 去重与预算 → LLM
         │
         └── 教材问答：多模态文本 ─┐
                     OCR 文本 ─────┼→ RRF 文本融合 → 图文上下文 → VL 模型
@@ -178,7 +179,8 @@ python -m src.cli.run_server
 5. BM25 索引在 collection 第一次被查询时从 Chroma 原文懒加载并缓存；导入数据后新启动的服务会重建索引，也可调用 `invalidate()` 主动失效。
 6. LLM Reranker 在一次结构化调用中对 Top-N 候选评分；异常、空响应或 JSON 解析失败时保留 RRF 排名。
 7. 围绕前几个重排后的命中点补齐同一会话的前后消息，按原对话顺序组织并对重叠邻域去重。
-8. 模型结合人物提示词、完整对话片段和会话历史生成回复。
+8. ContextBuilder 再执行规范化近重复检测、单片段限长和总字符预算；长片段优先在句界截断，避免一个超长结果挤占全部上下文。
+9. 模型结合人物提示词、实际入选的对话片段和会话历史生成回复。
 
 路由无法解析或模型调用失败时默认选择检索，以减少遗漏相关记忆的风险。系统不保存或返回模型的内部推理过程。
 
@@ -199,7 +201,7 @@ OCR 通道不可用时会降级为多模态文本与图片检索，不让单个�
 Copy-Item evaluation/retrieval_queries.example.jsonl evaluation/retrieval_queries.jsonl
 ```
 
-运行基础相似度检索与“查询改写 + 时间过滤 + 混合召回 + LLM 重排 + 时间邻域扩展”对比：
+运行基础相似度检索与“查询改写 + 时间过滤 + 混合召回 + 重排 + 邻域扩展 + 上下文预算”对比：
 
 ```bash
 python -m src.cli.evaluate_retrieval \
@@ -208,7 +210,7 @@ python -m src.cli.evaluate_retrieval \
   --k 5
 ```
 
-报告默认写入 `evaluation/results/`，包含 Hit Rate@K、MRR@K、Recall@K、平均/P50/P95 延迟以及逐样本变化。`evaluation/retrieval_queries.example.jsonl` 只描述格式，不代表真实实验结果；项目指标应由完整标注集和保存的评测报告支撑。详见 [evaluation/README.md](./evaluation/README.md)。
+报告默认写入 `evaluation/results/`，包含 Hit Rate@K、MRR@K、Recall@K、Context Precision@K、平均/P50/P95 延迟以及逐样本变化。优化组的指标基于字符预算内实际进入提示词的片段计算。`evaluation/retrieval_queries.example.jsonl` 只描述格式，不代表真实实验结果；项目指标应由完整标注集和保存的评测报告支撑。详见 [evaluation/README.md](./evaluation/README.md)。
 
 ## 测试与 CI
 

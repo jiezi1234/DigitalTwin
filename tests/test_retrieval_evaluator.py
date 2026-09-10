@@ -12,11 +12,15 @@ from src.evaluation.retrieval_evaluator import (
 def test_load_evaluation_cases(tmp_path):
     dataset = tmp_path / "cases.jsonl"
     dataset.write_text(
-        json.dumps({
-            "id": "q1",
-            "query": "测试问题",
-            "relevant": [{"source_file": "book.pdf", "page": 2}],
-        }, ensure_ascii=False) + "\n",
+        json.dumps(
+            {
+                "id": "q1",
+                "query": "测试问题",
+                "relevant": [{"source_file": "book.pdf", "page": 2}],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -36,7 +40,9 @@ def test_load_evaluation_cases_rejects_missing_labels(tmp_path):
 
 def test_retrieval_metrics_are_computed_at_k():
     cases = [
-        EvaluationCase("q1", "问题1", [{"source_file": "a.csv", "content_contains": "目标"}]),
+        EvaluationCase(
+            "q1", "问题1", [{"source_file": "a.csv", "content_contains": "目标"}]
+        ),
         EvaluationCase("q2", "问题2", [{"source_file": "b.csv", "page": 3}]),
     ]
 
@@ -53,6 +59,7 @@ def test_retrieval_metrics_are_computed_at_k():
     assert report["metrics"]["hit_rate@5"] == 0.5
     assert report["metrics"]["mrr@5"] == 0.25
     assert report["metrics"]["recall@5"] == 0.5
+    assert report["metrics"]["context_precision@5"] == 0.25
 
 
 def test_compare_reports_improved_and_regressed_cases():

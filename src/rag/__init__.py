@@ -3,6 +3,7 @@ from src.rag.react_router import ReActDecision, ReActRetrievalRouter
 from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
+from src.rag.context_builder import ContextBuilder, ContextBuildResult
 
 __all__ = [
     "QueryProcessor",
@@ -12,4 +13,6 @@ __all__ = [
     "BM25Retriever",
     "LLMReranker",
     "MetadataFilterBuilder",
+    "ContextBuilder",
+    "ContextBuildResult",
 ]

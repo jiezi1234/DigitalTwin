@@ -15,6 +15,7 @@ from src.infrastructure.db_client import DBClient
 from src.services.textbook_rag_service import TextbookRAGService
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
+from src.rag.context_builder import ContextBuilder
 
 logger = logging.getLogger(__name__)
 tutor_bp = Blueprint("tutor", __name__)
@@ -56,15 +57,18 @@ def _build_multimodal_messages(
         if not image_path:
             continue
         try:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": _local_image_to_data_url(image_path)},
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _local_image_to_data_url(image_path)},
+                }
+            )
         except Exception as exc:
             logger.warning(f"读取命中图片失败，已跳过: {image_path} - {exc}")
 
     messages.append({"role": "user", "content": content})
     return messages
+
 
 def get_tutor_service():
     global _tutor_rag_service
@@ -77,10 +81,15 @@ def get_tutor_service():
                 image_collection_name=Config.TUTOR_MM_IMAGE_COLLECTION,
                 ocr_collection_name=Config.TUTOR_OCR_TEXT_COLLECTION,
                 query_history_messages=Config.RAG_QUERY_HISTORY_MESSAGES,
+                context_builder=ContextBuilder(
+                    max_record_chars=Config.RAG_CONTEXT_RECORD_MAX_CHARS,
+                    dedup_threshold=Config.RAG_CONTEXT_DEDUP_THRESHOLD,
+                ),
             )
         except Exception as e:
             logger.warning(f"助教服务初始化失败 (可能未导入课本): {e}")
     return _tutor_rag_service
+
 
 @tutor_bp.route("/tutor/chat", methods=["POST"])
 def tutor_chat():
@@ -120,9 +129,11 @@ def tutor_chat():
             ocr_results = retrieval["ocr_text_results"]
             image_results = retrieval["image_results"]
             if results:
-                context_text = service.format_context(
+                context_build = service.build_context(
                     results, max_context_length=Config.TUTOR_MAX_CONTEXT_LENGTH
                 )
+                context_text = context_build.text
+                results = context_build.selected_results
             if image_results:
                 image_context = service.format_image_context(image_results)
                 image_hits = service.serialize_images(image_results)
@@ -140,7 +151,9 @@ def tutor_chat():
     # 构建 Prompt
     system_content = Config.TUTOR_SYSTEM_PROMPT
     if context_text:
-        system_content = f"以下是相关课本内容：\n\n{context_text}\n\n{Config.TUTOR_SYSTEM_PROMPT}"
+        system_content = (
+            f"以下是相关课本内容：\n\n{context_text}\n\n{Config.TUTOR_SYSTEM_PROMPT}"
+        )
     if image_context:
         system_content = (
             f"{system_content}\n\n以下是检索到的相关图片及其附近文字：\n\n{image_context}\n\n"
@@ -161,6 +174,7 @@ def tutor_chat():
     )
 
     if stream:
+
         def generate():
             full_reply = []
             logger.info(
@@ -183,7 +197,11 @@ def tutor_chat():
 
             # 回答完成后，根据实际引用提取 sources
             reply_text = "".join(full_reply)
-            sources = service.get_sources(results, reply=reply_text) if service and results else []
+            sources = (
+                service.get_sources(results, reply=reply_text)
+                if service and results
+                else []
+            )
             yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
             yield f"data: {json.dumps({'type': 'images', 'images': image_hits})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -213,22 +231,28 @@ def tutor_chat():
         messages.append({"role": "assistant", "content": reply})
 
         # 根据实际引用提取 sources
-        sources = service.get_sources(results, reply=reply) if service and results else []
+        sources = (
+            service.get_sources(results, reply=reply) if service and results else []
+        )
 
         # 会话截断
         if len(messages) > 40:
             tutor_sessions[session_id] = messages[-40:]
 
-        return jsonify({
-            "status": "success",
-            "reply": reply,
-            "sources": sources,
-            "images": image_hits,
-        })
+        return jsonify(
+            {
+                "status": "success",
+                "reply": reply,
+                "sources": sources,
+                "images": image_hits,
+            }
+        )
+
 
 @tutor_bp.route("/tutor/import", methods=["POST"])
 def tutor_import():
     """触发课本导入 (后台)"""
+
     def do_import():
         try:
             index_service = MultiModalPDFIndexService(
@@ -250,6 +274,7 @@ def tutor_import():
 
     threading.Thread(target=do_import, daemon=True).start()
     return jsonify({"status": "success", "message": "已在后台启动导入"})
+
 
 @tutor_bp.route("/tutor/reset", methods=["POST"])
 def tutor_reset():

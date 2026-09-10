@@ -61,6 +61,10 @@ class Config:
         os.getenv("RAG_METADATA_FILTERING_ENABLED", "true").lower() == "true"
     )
     RAG_TIMEZONE_OFFSET = os.getenv("RAG_TIMEZONE_OFFSET", "+08:00")
+    RAG_CONTEXT_RECORD_MAX_CHARS = int(os.getenv("RAG_CONTEXT_RECORD_MAX_CHARS", "500"))
+    RAG_CONTEXT_DEDUP_THRESHOLD = float(
+        os.getenv("RAG_CONTEXT_DEDUP_THRESHOLD", "0.90")
+    )
     REACT_ENABLED = os.getenv("REACT_ENABLED", "true").lower() == "true"
     REACT_ROUTER_MODEL = os.getenv("REACT_ROUTER_MODEL", "qwen-turbo")
     REACT_HISTORY_MESSAGES = int(os.getenv("REACT_HISTORY_MESSAGES", "6"))
