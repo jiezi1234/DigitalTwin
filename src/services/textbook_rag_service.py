@@ -12,8 +12,15 @@ from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingCl
 from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.rag.query_processor import QueryProcessor
 from src.rag.context_builder import ContextBuilder, ContextBuildResult
-from src.rag.citation_validator import CitationValidation, CitationValidator
+from src.rag.citation_validator import (
+    CitationGroundingValidation,
+    CitationGroundingValidator,
+    CitationValidation,
+    CitationValidator,
+)
 from src.rag.evidence_policy import EvidenceAssessment, EvidenceConfidencePolicy
+from src.rag.bm25_retriever import BM25Retriever
+from src.rag.llm_reranker import LLMReranker
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,18 @@ class TextbookRAGService:
         min_text_evidence_score: float = 0.45,
         min_image_evidence_score: float = 0.45,
         min_evidence_items: int = 1,
+        lexical_retriever: Optional[BM25Retriever] = None,
+        reranker: Optional[LLMReranker] = None,
+        enable_hybrid_search: bool = False,
+        bm25_candidates: int = 30,
+        rrf_k: int = 60,
+        mm_text_weight: float = 1.0,
+        ocr_text_weight: float = 0.9,
+        bm25_weight: float = 0.8,
+        enable_reranking: bool = False,
+        rerank_candidates: int = 20,
+        citation_grounding_validator: Optional[CitationGroundingValidator] = None,
+        min_citation_support_score: float = 0.45,
     ):
         self.llm_client = llm_client
         self.db_client = db_client
@@ -56,6 +75,24 @@ class TextbookRAGService:
             min_text_score=min_text_evidence_score,
             min_image_score=min_image_evidence_score,
             min_items=min_evidence_items,
+        )
+        self.enable_hybrid_search = enable_hybrid_search
+        self.lexical_retriever = lexical_retriever or (
+            BM25Retriever(db_client) if enable_hybrid_search else None
+        )
+        self.enable_reranking = enable_reranking
+        self.reranker = reranker or (
+            LLMReranker(llm_client) if enable_reranking else None
+        )
+        self.bm25_candidates = max(1, bm25_candidates)
+        self.rrf_k = max(1, rrf_k)
+        self.mm_text_weight = max(0.0, mm_text_weight)
+        self.ocr_text_weight = max(0.0, ocr_text_weight)
+        self.bm25_weight = max(0.0, bm25_weight)
+        self.rerank_candidates = max(1, rerank_candidates)
+        self.citation_grounding_validator = (
+            citation_grounding_validator
+            or CitationGroundingValidator(min_citation_support_score)
         )
         self.query_processor = QueryProcessor(
             llm_client=llm_client,
@@ -77,12 +114,17 @@ class TextbookRAGService:
             query,
             conversation=conversation,
         )
+        candidate_k = max(
+            text_k,
+            self.bm25_candidates if self.enable_hybrid_search else text_k,
+            self.rerank_candidates if self.enable_reranking else text_k,
+        )
         query_embedding = self.mm_client.embed_query(processed_query)
 
         multimodal_text_results = self.db_client.search_by_embedding(
             embedding=query_embedding,
             collection_name=self.text_collection_name,
-            k=text_k,
+            k=candidate_k,
         )
         image_results = self.db_client.search_by_embedding(
             embedding=query_embedding,
@@ -99,23 +141,49 @@ class TextbookRAGService:
                 ocr_text_results = self.db_client.search_by_embedding(
                     embedding=ocr_query_embedding,
                     collection_name=self.ocr_collection_name,
-                    k=ocr_k,
+                    k=max(ocr_k, candidate_k),
                 )
             except Exception as exc:
                 # OCR 是补充召回通道，失败时保留多模态主链路的可用性。
                 logger.warning("OCR 文本检索失败，已降级为多模态检索: %s", exc)
 
+        bm25_results: List[SearchResult] = []
+        if self.enable_hybrid_search and self.lexical_retriever:
+            try:
+                bm25_results = self.lexical_retriever.search(
+                    query=processed_query,
+                    collection_name=self.text_collection_name,
+                    k=self.bm25_candidates,
+                )
+            except Exception as exc:
+                logger.warning("教材 BM25 检索失败，已降级为向量召回: %s", exc)
+
         text_results = self._fuse_text_results(
             multimodal_text_results,
             ocr_text_results,
-            limit=text_k,
+            bm25_results=bm25_results,
+            limit=max(text_k, self.rerank_candidates),
+            rrf_k=self.rrf_k,
+            mm_text_weight=self.mm_text_weight,
+            ocr_text_weight=self.ocr_text_weight,
+            bm25_weight=self.bm25_weight,
         )
+        if self.enable_reranking and self.reranker:
+            text_results = self.reranker.rerank(
+                query=processed_query,
+                results=text_results,
+                top_k=text_k,
+                candidate_limit=self.rerank_candidates,
+            )
+        else:
+            text_results = text_results[:text_k]
 
         return {
             "query": processed_query,
             "text_results": text_results,
             "multimodal_text_results": multimodal_text_results,
             "ocr_text_results": ocr_text_results,
+            "bm25_results": bm25_results,
             "image_results": image_results,
         }
 
@@ -135,13 +203,20 @@ class TextbookRAGService:
         ocr_results: List[SearchResult],
         limit: int,
         rrf_k: int = 60,
+        bm25_results: Optional[List[SearchResult]] = None,
+        mm_text_weight: float = 1.0,
+        ocr_text_weight: float = 0.9,
+        bm25_weight: float = 0.8,
     ) -> List[SearchResult]:
-        """使用 RRF 融合不同 Embedding 空间的排序，避免直接比较距离分数。"""
+        """使用加权 RRF 融合多模态、OCR 与 BM25 的不可比分数。"""
         fused: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-        for channel, results in (
-            ("multimodal_text", multimodal_results),
-            ("ocr_text", ocr_results),
+        for channel, weight, results in (
+            ("multimodal_text", max(0.0, mm_text_weight), multimodal_results),
+            ("ocr_text", max(0.0, ocr_text_weight), ocr_results),
+            ("bm25", max(0.0, bm25_weight), bm25_results or []),
         ):
+            if weight == 0:
+                continue
             for rank, (content, metadata, channel_score) in enumerate(results, 1):
                 key = cls._result_key(content, metadata)
                 if key not in fused:
@@ -152,7 +227,7 @@ class TextbookRAGService:
                         "channels": [],
                     }
                 item = fused[key]
-                item["score"] += 1.0 / (rrf_k + rank)
+                item["score"] += weight / (max(1, rrf_k) + rank)
                 item["channels"].append(channel)
                 item["metadata"][f"{channel}_score"] = round(channel_score, 6)
 
@@ -316,6 +391,14 @@ class TextbookRAGService:
     ) -> CitationValidation:
         """校验文本引用是否指向实际进入模型上下文的片段。"""
         return self.citation_validator.validate(reply, context_count=len(results))
+
+    def validate_citation_grounding(
+        self,
+        reply: Optional[str],
+        results: List[SearchResult],
+    ) -> CitationGroundingValidation:
+        """检查回答事实句的引用覆盖率及引用内容的词汇支持度。"""
+        return self.citation_grounding_validator.validate(reply, results)
 
     def assess_evidence(
         self, text_results: List[SearchResult], image_results: List[Any]

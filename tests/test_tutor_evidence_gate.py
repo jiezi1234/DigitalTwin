@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 from src.api.app import create_app
 from src.api.routes import tutor
-from src.rag.citation_validator import CitationValidator
+from src.rag.citation_validator import CitationGroundingValidator, CitationValidator
 from src.rag.context_builder import ContextBuildResult
 from src.rag.evidence_policy import EvidenceConfidencePolicy
 
@@ -29,6 +29,9 @@ def test_tutor_rejects_low_confidence_hits_without_calling_llm(monkeypatch):
     service.assess_evidence.return_value = assessment
     service.validate_citations.side_effect = (
         lambda reply, results: CitationValidator.validate(reply, len(results))
+    )
+    service.validate_citation_grounding.side_effect = (
+        lambda reply, results: CitationGroundingValidator().validate(reply, results)
     )
 
     monkeypatch.setattr(tutor, "get_tutor_service", lambda: service)

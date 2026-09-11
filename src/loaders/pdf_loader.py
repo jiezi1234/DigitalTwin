@@ -7,8 +7,10 @@ import logging
 from datetime import datetime, timezone
 import concurrent.futures
 import multiprocessing
+from collections import Counter
 from typing import List, Dict, Any, Optional
 from src.loaders.base import DataLoader
+from src.loaders.pdf_chunker import StructureAwarePDFChunker
 from src.infrastructure.document import Document
 from src.infrastructure.telemetry import get_tracer
 
@@ -17,18 +19,18 @@ tracer = get_tracer(__name__)
 
 # 默认噪音模式 (同步自旧项目)
 DEFAULT_NOISE_PATTERNS = [
-    re.compile(r'^Principle and Technology of Database\s*$', re.MULTILINE),
-    re.compile(r'^NOTES\s*$', re.MULTILINE),
-    re.compile(r'^Copyright\s*©.*$', re.MULTILINE),
-    re.compile(r'^Page\s+\d+\s*$', re.MULTILINE),
+    re.compile(r"^Principle and Technology of Database\s*$", re.MULTILINE),
+    re.compile(r"^NOTES\s*$", re.MULTILINE),
+    re.compile(r"^Copyright\s*©.*$", re.MULTILINE),
+    re.compile(r"^Page\s+\d+\s*$", re.MULTILINE),
 ]
 
 # 章节标题提取正则
 CHAPTER_PATTERNS = [
-    re.compile(r'^第[一二三四五六七八九十\d]+章\s+'),
-    re.compile(r'^第[一二三四五六七八九十\d]+节\s+'),
-    re.compile(r'^\d+\.\d+(\.\d+)?\s+'),  # 1.1 / 1.1.1 格式
-    re.compile(r'^Chapter\s+\d+', re.IGNORECASE),
+    re.compile(r"^第[一二三四五六七八九十\d]+章\s+"),
+    re.compile(r"^第[一二三四五六七八九十\d]+节\s+"),
+    re.compile(r"^\d+\.\d+(\.\d+)?\s+"),  # 1.1 / 1.1.1 格式
+    re.compile(r"^Chapter\s+\d+", re.IGNORECASE),
 ]
 
 
@@ -43,8 +45,10 @@ class PDFLoader(DataLoader):
         ocr_text_threshold: int = 50,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
+        chunk_max_size: Optional[int] = None,
+        chunk_overlap_blocks: Optional[int] = None,
         max_workers: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         初始化 PDF 加载器
@@ -64,7 +68,21 @@ class PDFLoader(DataLoader):
         self.ocr_text_threshold = ocr_text_threshold
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        
+        self.chunk_max_size = chunk_max_size or max(chunk_size, int(chunk_size * 1.5))
+        self.chunk_overlap_blocks = max(
+            0,
+            (
+                chunk_overlap_blocks
+                if chunk_overlap_blocks is not None
+                else int(chunk_overlap > 0)
+            ),
+        )
+        self.chunker = StructureAwarePDFChunker(
+            target_chars=chunk_size,
+            max_chars=self.chunk_max_size,
+            overlap_blocks=self.chunk_overlap_blocks,
+        )
+
         if max_workers is None:
             self.max_workers = min(8, multiprocessing.cpu_count())
         else:
@@ -73,9 +91,9 @@ class PDFLoader(DataLoader):
     def _clean_text(self, text: str) -> str:
         """清理页面文本噪音"""
         for pattern in DEFAULT_NOISE_PATTERNS:
-            text = pattern.sub('', text)
+            text = pattern.sub("", text)
         # 清理多余空行
-        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
     @staticmethod
@@ -88,6 +106,95 @@ class PDFLoader(DataLoader):
             "x1": round(float(x1), 3),
             "y1": round(float(y1), 3),
         }
+
+    @staticmethod
+    def _extract_text_block(block: Dict[str, Any]) -> Dict[str, Any]:
+        lines = []
+        font_sizes = []
+        font_names = []
+        is_bold = False
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            line_text = "".join(str(span.get("text", "")) for span in spans).strip()
+            if line_text:
+                lines.append(line_text)
+            for span in spans:
+                font_sizes.append(float(span.get("size") or 0.0))
+                font_name = str(span.get("font") or "")
+                if font_name:
+                    font_names.append(font_name)
+                is_bold = is_bold or bool(int(span.get("flags") or 0) & 16)
+                is_bold = is_bold or "bold" in font_name.lower()
+
+        return {
+            "content": "\n".join(lines),
+            "font_size": round(max(font_sizes, default=0.0), 2),
+            "font_name": ",".join(dict.fromkeys(font_names))[:200],
+            "is_bold": is_bold,
+        }
+
+    @staticmethod
+    def _page_body_font_size(page_dict: Dict[str, Any]) -> float:
+        sizes = []
+        for block in page_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    size = float(span.get("size") or 0.0)
+                    text = str(span.get("text") or "").strip()
+                    if size > 0 and text:
+                        sizes.extend([round(size, 1)] * max(1, min(20, len(text))))
+        if not sizes:
+            return 0.0
+        return float(Counter(sizes).most_common(1)[0][0])
+
+    @classmethod
+    def _extract_page_tables(cls, page: Any) -> List[Dict[str, Any]]:
+        find_tables = getattr(page, "find_tables", None)
+        if not callable(find_tables):
+            return []
+        try:
+            found = find_tables()
+            tables = []
+            for index, table in enumerate(getattr(found, "tables", [])):
+                rows = table.extract() or []
+                normalized_rows = [
+                    [str(cell or "").strip() for cell in row] for row in rows
+                ]
+                content = "\n".join(
+                    " | ".join(row) for row in normalized_rows if any(row)
+                ).strip()
+                if not content:
+                    continue
+                tables.append(
+                    {
+                        "table_index": index,
+                        "bbox": cls._normalize_bbox(table.bbox),
+                        "content": content,
+                        "row_count": len(normalized_rows),
+                        "column_count": max(
+                            (len(row) for row in normalized_rows), default=0
+                        ),
+                        "content_type": "table",
+                    }
+                )
+            return tables
+        except Exception as exc:
+            logger.debug("PDF 表格识别失败，保留普通文本块: %s", exc)
+            return []
+
+    @staticmethod
+    def _bbox_center_inside(inner: Any, outer: Dict[str, float]) -> bool:
+        if not inner or not outer:
+            return False
+        x0, y0, x1, y1 = (float(value) for value in inner)
+        center_x = (x0 + x1) / 2
+        center_y = (y0 + y1) / 2
+        return (
+            outer["x0"] <= center_x <= outer["x1"]
+            and outer["y0"] <= center_y <= outer["y1"]
+        )
 
     def export_structured(
         self,
@@ -124,6 +231,7 @@ class PDFLoader(DataLoader):
                 "page_count": 0,
                 "text_block_count": 0,
                 "image_count": 0,
+                "table_count": 0,
             },
         }
 
@@ -133,35 +241,53 @@ class PDFLoader(DataLoader):
 
             for page_index, page in enumerate(doc):
                 page_dict = page.get_text("dict")
+                body_font_size = self._page_body_font_size(page_dict)
                 page_entry = {
                     "page": page_index + 1,
                     "width": round(float(page.rect.width), 3),
                     "height": round(float(page.rect.height), 3),
                     "text_blocks": [],
                     "images": [],
+                    "tables": [],
                 }
+
+                page_tables = self._extract_page_tables(page)
+                page_entry["tables"] = page_tables
+                export_data["summary"]["table_count"] += len(page_tables)
 
                 image_index = 0
                 for block in page_dict.get("blocks", []):
                     block_type = block.get("type")
 
                     if block_type == 0:
-                        spans = []
                         for line in block.get("lines", []):
-                            for span in line.get("spans", []):
-                                spans.append(span.get("text", ""))
+                            line_bbox = line.get("bbox") or block.get("bbox")
+                            if any(
+                                self._bbox_center_inside(line_bbox, table["bbox"])
+                                for table in page_tables
+                            ):
+                                continue
 
-                        raw_text = "".join(spans)
-                        cleaned_text = self._clean_text(raw_text)
-                        if not cleaned_text:
-                            continue
+                            style = self._extract_text_block({"lines": [line]})
+                            cleaned_text = self._clean_text(style["content"])
+                            if not cleaned_text:
+                                continue
 
-                        page_entry["text_blocks"].append({
-                            "block_index": len(page_entry["text_blocks"]),
-                            "bbox": self._normalize_bbox(block["bbox"]),
-                            "content": cleaned_text,
-                        })
-                        export_data["summary"]["text_block_count"] += 1
+                            page_entry["text_blocks"].append(
+                                {
+                                    **style,
+                                    "block_index": len(page_entry["text_blocks"]),
+                                    "bbox": self._normalize_bbox(line_bbox),
+                                    "content_type": StructureAwarePDFChunker.classify_block(
+                                        cleaned_text,
+                                        style["is_bold"],
+                                        style["font_size"],
+                                        body_font_size,
+                                    ),
+                                    "content": cleaned_text,
+                                }
+                            )
+                            export_data["summary"]["text_block_count"] += 1
 
                     elif block_type == 1:
                         image_bytes = block.get("image")
@@ -169,34 +295,39 @@ class PDFLoader(DataLoader):
                         image_index += 1
                         image_hash = hashlib.sha256(image_bytes or b"").hexdigest()
                         canonical_relative_path = written_images.get(image_hash)
+                        is_duplicate = canonical_relative_path is not None
 
                         if canonical_relative_path is None:
-                            image_filename = (
-                                f"page_{page_index + 1:04d}_img_{image_index:03d}.{image_ext}"
+                            image_filename = f"page_{page_index + 1:04d}_img_{image_index:03d}.{image_ext}"
+                            canonical_relative_path = os.path.join(
+                                image_dirname, image_filename
                             )
-                            canonical_relative_path = os.path.join(image_dirname, image_filename)
-                            image_path = os.path.join(output_dir, canonical_relative_path)
+                            image_path = os.path.join(
+                                output_dir, canonical_relative_path
+                            )
 
                             if image_bytes:
                                 with open(image_path, "wb") as image_file:
                                     image_file.write(image_bytes)
                             written_images[image_hash] = canonical_relative_path
 
-                        page_entry["images"].append({
-                            "image_index": image_index - 1,
-                            "bbox": self._normalize_bbox(block["bbox"]),
-                            "width": block.get("width"),
-                            "height": block.get("height"),
-                            "colorspace": block.get("colorspace"),
-                            "bpc": block.get("bpc"),
-                            "xres": block.get("xres"),
-                            "yres": block.get("yres"),
-                            "extension": image_ext,
-                            "file": canonical_relative_path.replace(os.sep, "/"),
-                            "image_hash": image_hash,
-                            "size_bytes": len(image_bytes or b""),
-                            "is_duplicate": image_hash in written_images and written_images[image_hash] != canonical_relative_path,
-                        })
+                        page_entry["images"].append(
+                            {
+                                "image_index": image_index - 1,
+                                "bbox": self._normalize_bbox(block["bbox"]),
+                                "width": block.get("width"),
+                                "height": block.get("height"),
+                                "colorspace": block.get("colorspace"),
+                                "bpc": block.get("bpc"),
+                                "xres": block.get("xres"),
+                                "yres": block.get("yres"),
+                                "extension": image_ext,
+                                "file": canonical_relative_path.replace(os.sep, "/"),
+                                "image_hash": image_hash,
+                                "size_bytes": len(image_bytes or b""),
+                                "is_duplicate": is_duplicate,
+                            }
+                        )
                         export_data["summary"]["image_count"] += 1
 
                 export_data["pages"].append(page_entry)
@@ -218,23 +349,29 @@ class PDFLoader(DataLoader):
                 raise FileNotFoundError(f"PDF 文件不存在: {self.filepath}")
 
             filename = os.path.basename(self.filepath)
-            
+
             # 1. 获取总页数
             with fitz.open(self.filepath) as doc:
                 total_pages = len(doc)
-                
+
                 # 提前测试 Tesseract 依赖，避免多进程重复报错刷屏
                 if self.ocr_enabled and total_pages > 0:
                     try:
                         # 用第一页轻轻地初始化一下 OCR
-                        doc[0].get_textpage_ocr(language=self.ocr_language, dpi=72, full=False)
+                        doc[0].get_textpage_ocr(
+                            language=self.ocr_language, dpi=72, full=False
+                        )
                     except Exception as e:
-                        if "Tesseract is not installed" in str(e) or "tessdata" in str(e):
-                            logger.warning(f"由于未安装 Tesseract OCR 或未配置 tessdata，已自动回退为纯文字提取模式，跳过所有 OCR 处理。({e})")
+                        if "Tesseract is not installed" in str(e) or "tessdata" in str(
+                            e
+                        ):
+                            logger.warning(
+                                f"由于未安装 Tesseract OCR 或未配置 tessdata，已自动回退为纯文字提取模式，跳过所有 OCR 处理。({e})"
+                            )
                             self.ocr_enabled = False
                         else:
                             logger.warning(f"OCR 初始化异常: {e}")
-            
+
             # 2. 准备并行任务参数
             tasks = [
                 {
@@ -242,17 +379,19 @@ class PDFLoader(DataLoader):
                     "page_num": i,
                     "ocr_enabled": self.ocr_enabled,
                     "ocr_language": self.ocr_language,
-                    "ocr_text_threshold": self.ocr_text_threshold
+                    "ocr_text_threshold": self.ocr_text_threshold,
                 }
                 for i in range(total_pages)
             ]
-            
+
             # 3. 调用基类通用并行方法
-            logger.info(f"调用基类并行组件解析 PDF (共 {total_pages} 页, 并发: {self.max_workers})...")
+            logger.info(
+                f"调用基类并行组件解析 PDF (共 {total_pages} 页, 并发: {self.max_workers})..."
+            )
             pages_data = self._run_parallel(
-                PDFLoader._process_single_page_static, 
-                tasks, 
-                max_workers=self.max_workers
+                PDFLoader._process_single_page_static,
+                tasks,
+                max_workers=self.max_workers,
             )
 
             # 4. 顺序处理结果，进行章节检测和分块
@@ -263,7 +402,9 @@ class PDFLoader(DataLoader):
             for p_data in pages_data:
                 if not p_data or p_data.get("error") or not p_data.get("text"):
                     if p_data and p_data.get("error"):
-                        logger.error(f"处理第 {p_data['page_num']+1} 页失败: {p_data['error']}")
+                        logger.error(
+                            f"处理第 {p_data['page_num']+1} 页失败: {p_data['error']}"
+                        )
                     continue
 
                 text = p_data["text"]
@@ -271,7 +412,9 @@ class PDFLoader(DataLoader):
                 is_ocr = p_data["is_ocr"]
 
                 # 章节检测 (必须按顺序进行)
-                current_chapter, current_section = self._detect_headings(text, current_chapter, current_section)
+                current_chapter, current_section = self._detect_headings(
+                    text, current_chapter, current_section
+                )
 
                 # 分块
                 page_chunks = self._split_text(text)
@@ -284,12 +427,9 @@ class PDFLoader(DataLoader):
                         "chapter": current_chapter,
                         "section": current_section,
                         "chunk_index": i,
-                        "content_type": "textbook"
+                        "content_type": "textbook",
                     }
-                    documents.append(Document(
-                        content=chunk_text,
-                        metadata=metadata
-                    ))
+                    documents.append(Document(content=chunk_text, metadata=metadata))
 
             logger.info(f"PDF 加载完成: {filename}, 共生成 {len(documents)} 个 Doc 块")
             span.set_attribute("loader.docs_count", len(documents))
@@ -315,9 +455,7 @@ class PDFLoader(DataLoader):
                 if ocr_enabled and len(raw_text.strip()) < ocr_text_threshold:
                     try:
                         tp = page.get_textpage_ocr(
-                            language=ocr_language,
-                            dpi=150,
-                            full=True
+                            language=ocr_language, dpi=150, full=True
                         )
                         raw_text = page.get_text("text", textpage=tp)
                         is_ocr = True
@@ -329,63 +467,44 @@ class PDFLoader(DataLoader):
                 text = raw_text
                 # 默认噪音模式 (同步自旧项目)
                 noise_patterns = [
-                    re.compile(r'^Principle and Technology of Database\s*$', re.MULTILINE),
-                    re.compile(r'^NOTES\s*$', re.MULTILINE),
-                    re.compile(r'^Copyright\s*©.*$', re.MULTILINE),
-                    re.compile(r'^Page\s+\d+\s*$', re.MULTILINE),
+                    re.compile(
+                        r"^Principle and Technology of Database\s*$", re.MULTILINE
+                    ),
+                    re.compile(r"^NOTES\s*$", re.MULTILINE),
+                    re.compile(r"^Copyright\s*©.*$", re.MULTILINE),
+                    re.compile(r"^Page\s+\d+\s*$", re.MULTILINE),
                 ]
                 for pattern in noise_patterns:
-                    text = pattern.sub('', text)
-                text = re.sub(r'\n{3,}', '\n\n', text)
+                    text = pattern.sub("", text)
+                text = re.sub(r"\n{3,}", "\n\n", text)
                 cleaned_text = text.strip()
 
                 return {
                     "page_num": page_num,
                     "text": cleaned_text,
                     "is_ocr": is_ocr,
-                    "error": None
+                    "error": None,
                 }
         except Exception as e:
-            return {
-                "page_num": page_num,
-                "text": "",
-                "is_ocr": False,
-                "error": str(e)
-            }
+            return {"page_num": page_num, "text": "", "is_ocr": False, "error": str(e)}
 
     def _detect_headings(self, text: str, current_chapter: str, current_section: str):
         """尝试从文本更新当前章节/小节信息"""
-        lines = text.split('\n')
+        lines = text.split("\n")
         for line in lines:
             line = line.strip()
-            if not line: continue
+            if not line:
+                continue
             for pattern in CHAPTER_PATTERNS:
                 if pattern.match(line):
-                    if '章' in line or line.lower().startswith('chapter'):
+                    if "章" in line or line.lower().startswith("chapter"):
                         current_chapter = line
                         current_section = ""
                     else:
                         current_section = line
-                    break # 找到一个匹配后跳出内层模式循环
+                    break  # 找到一个匹配后跳出内层模式循环
         return current_chapter, current_section
 
     def _split_text(self, text: str) -> List[str]:
-        """将页面文本根据 chunk_size 和 overlap 进行分块"""
-        if len(text) <= self.chunk_size:
-            return [text]
-
-        chunks = []
-        start = 0
-        while start < len(text):
-            end = start + self.chunk_size
-            chunk = text[start:end]
-            chunks.append(chunk)
-            
-            if end >= len(text):
-                break
-                
-            start = end - self.chunk_overlap
-            if start >= end:
-                start = end
-        
-        return chunks
+        """按标题、段落和句子边界切分；保留旧方法名供导入脚本复用。"""
+        return self.chunker.split_text(text)

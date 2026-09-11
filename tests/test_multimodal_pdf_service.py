@@ -39,9 +39,13 @@ def test_build_text_and_image_documents(tmp_path):
         ],
     }
 
-    service = MultiModalPDFIndexService(db_client=MagicMock(), embedding_client=MagicMock())
+    service = MultiModalPDFIndexService(
+        db_client=MagicMock(), embedding_client=MagicMock()
+    )
     text_docs = service.build_text_documents(structured)
-    image_docs, image_paths = service.build_image_documents(structured, str(tmp_path / "sample"))
+    image_docs, image_paths = service.build_image_documents(
+        structured, str(tmp_path / "sample")
+    )
 
     assert len(text_docs) == 1
     assert text_docs[0].content == "数据库系统基础"
@@ -61,7 +65,9 @@ def test_multimodal_tracking_skips_completed_batches(tmp_path):
     embedding_client = MagicMock()
     embedding_client.embed_texts.return_value = [[0.1, 0.2]]
 
-    service = MultiModalPDFIndexService(db_client=db_client, embedding_client=embedding_client)
+    service = MultiModalPDFIndexService(
+        db_client=db_client, embedding_client=embedding_client
+    )
 
     doc1 = Document(content="A", metadata={"page": 1}, doc_id="doc-1")
     doc2 = Document(content="B", metadata={"page": 2}, doc_id="doc-2")
@@ -82,3 +88,95 @@ def test_multimodal_tracking_skips_completed_batches(tmp_path):
     assert imported_count == 1
     assert skipped_count == 1
     embedding_client.embed_texts.assert_called_once_with(["B"])
+
+
+def test_build_text_documents_creates_structured_table_chunk():
+    structured = {
+        "source_file": "sample.pdf",
+        "pages": [
+            {
+                "page": 3,
+                "text_blocks": [
+                    {
+                        "block_index": 0,
+                        "bbox": {"x0": 0, "y0": 0, "x1": 100, "y1": 20},
+                        "content": "3.1 关系模型",
+                        "content_type": "heading",
+                    },
+                    {
+                        "block_index": 1,
+                        "bbox": {"x0": 0, "y0": 30, "x1": 100, "y1": 50},
+                        "content": "关系模型使用二维表组织数据。",
+                        "content_type": "paragraph",
+                    },
+                ],
+                "tables": [
+                    {
+                        "table_index": 0,
+                        "bbox": {"x0": 0, "y0": 60, "x1": 100, "y1": 100},
+                        "content": "列名 | 类型\nid | integer",
+                        "content_type": "table",
+                    }
+                ],
+                "images": [],
+            }
+        ],
+    }
+    service = MultiModalPDFIndexService(
+        db_client=MagicMock(), embedding_client=MagicMock()
+    )
+
+    documents = service.build_text_documents(structured)
+
+    assert len(documents) == 2
+    assert documents[0].content.startswith("3.1 关系模型")
+    assert documents[1].metadata["content_type"] == "table"
+    assert documents[1].metadata["parent_id"] == "sample.pdf:page:3"
+    assert documents[1].metadata["chunk_strategy"] == "structure_aware_v1"
+
+
+def test_build_text_documents_carries_heading_to_following_page():
+    structured = {
+        "source_file": "sample.pdf",
+        "pages": [
+            {
+                "page": 1,
+                "text_blocks": [
+                    {
+                        "block_index": 0,
+                        "bbox": {},
+                        "content": "第2章 事务处理",
+                        "content_type": "heading",
+                    },
+                    {
+                        "block_index": 1,
+                        "bbox": {},
+                        "content": "事务是一组逻辑操作。",
+                        "content_type": "paragraph",
+                    },
+                ],
+                "tables": [],
+            },
+            {
+                "page": 2,
+                "text_blocks": [
+                    {
+                        "block_index": 0,
+                        "bbox": {},
+                        "content": "原子性要求操作全部成功或全部失败。",
+                        "content_type": "paragraph",
+                    }
+                ],
+                "tables": [],
+            },
+        ],
+    }
+    service = MultiModalPDFIndexService(
+        db_client=MagicMock(), embedding_client=MagicMock()
+    )
+
+    documents = service.build_text_documents(structured)
+
+    assert documents[-1].metadata["page"] == 2
+    assert documents[-1].metadata["heading"] == "第2章 事务处理"
+    assert documents[-1].content.startswith("第2章 事务处理")

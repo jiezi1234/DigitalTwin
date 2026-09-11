@@ -265,9 +265,12 @@ context = service.format_context(results)
 - 使用教材领域专用 Query Rewriting
 - 使用多模态 Embedding 检索文本块与图片
 - 使用文本 Embedding 检索 OCR collection
-- 使用 RRF 融合两个不可直接比较分数的文本排序
+- 使用 BM25 补充教材术语和精确关键词召回
+- 使用加权 RRF 融合多模态文本、OCR 与 BM25 三个不可直接比较的排序，再统一重排
+- PDF 文本按标题、段落、列表、图注和表格结构切分，图片按版面距离关联图注与正文
 - 通过独立 `EvidenceConfidencePolicy` 按文本/图片原始相似度和最少证据数执行回答门禁，低置信度命中也会拒答
 - 通过 `CitationValidator` 校验回答中的文本引用是否指向实际上下文
+- 通过 `CitationGroundingValidator` 检查事实句引用覆盖率及引用证据词汇支持度
 - 教材格式输出
 
 ```python
@@ -318,19 +321,21 @@ LLMClient (生成回复)
     ↓
 历史感知 QueryProcessor
     ↓
-多模态查询向量              文本查询向量
-    ↓                           ↓
-文本块 + 图片检索             OCR 文本检索
-    ↓                           ↓
-        RRF 文本排序融合
+多模态查询向量              文本查询向量           原始教材文本
+    ↓                           ↓                       ↓
+结构文本 + 图片检索          OCR 文本检索             BM25
+    ↓                           ↓                       ↓
+              加权 RRF 文本排序融合
+                         ↓
+                     Top-N 重排
                  ↓
 格式化上下文 + 图片引用
     ↓
 证据置信度达标？ ── 否 → 返回可配置的证据不足回复
-    ↓ 否
+    ↓ 是
 LLMClient（生成讲解）
     ↓
-文本引用编号校验
+引用编号 + 事实句证据支持校验
     ↓
 返回结果
 ```

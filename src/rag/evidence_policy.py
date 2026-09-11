@@ -28,12 +28,6 @@ class EvidenceAssessment:
 class EvidenceConfidencePolicy:
     """按模态阈值和最少命中数判断检索证据是否足以支撑回答。"""
 
-    TEXT_SCORE_FIELDS = (
-        "multimodal_text_score",
-        "ocr_text_score",
-        "rerank_score",
-    )
-
     def __init__(
         self,
         min_text_score: float = 0.45,
@@ -56,18 +50,20 @@ class EvidenceConfidencePolicy:
     def _text_score(cls, result: SearchResult) -> float:
         _, metadata, fallback_score = result
         metadata = metadata or {}
+        if "rerank_score" in metadata:
+            try:
+                rerank_score = float(metadata["rerank_score"])
+            except (TypeError, ValueError):
+                rerank_score = 0.0
+            if rerank_score > 1:
+                rerank_score /= 100
+            return cls._normalise_score(rerank_score)
+
         candidates = []
-        for field in cls.TEXT_SCORE_FIELDS:
+        for field in ("multimodal_text_score", "ocr_text_score"):
             if field not in metadata:
                 continue
             score = cls._normalise_score(metadata[field])
-            # 部分模型的 rerank 分数使用 0-100 标度。
-            try:
-                raw_score = float(metadata[field])
-            except (TypeError, ValueError):
-                raw_score = 0.0
-            if field == "rerank_score" and raw_score > 1:
-                score = cls._normalise_score(raw_score / 100)
             candidates.append(score)
         return max(candidates, default=cls._normalise_score(fallback_score))
 

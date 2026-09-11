@@ -14,6 +14,7 @@ from src.infrastructure.document import Document
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.loaders.base import DataLoader
 from src.loaders.pdf_loader import PDFLoader
+from src.loaders.pdf_chunker import StructureAwarePDFChunker
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,15 @@ logger = logging.getLogger(__name__)
 class MultiModalPDFIndexService:
     """将 PDF 的文本块和图片写入两个多模态 collection"""
 
-    def __init__(self, db_client, embedding_client: MultiModalEmbeddingClient):
+    def __init__(
+        self,
+        db_client,
+        embedding_client: MultiModalEmbeddingClient,
+        chunker: Optional[StructureAwarePDFChunker] = None,
+    ):
         self.db_client = db_client
         self.embedding_client = embedding_client
+        self.chunker = chunker or StructureAwarePDFChunker()
 
     @staticmethod
     def _read_structured_json(json_path: str) -> Dict[str, Any]:
@@ -38,7 +45,9 @@ class MultiModalPDFIndexService:
             return json.load(tracking_handle)
 
     @staticmethod
-    def _save_tracking(tracking_file: Optional[str], tracking_data: Dict[str, Any]) -> None:
+    def _save_tracking(
+        tracking_file: Optional[str], tracking_data: Dict[str, Any]
+    ) -> None:
         if not tracking_file:
             return
         os.makedirs(os.path.dirname(tracking_file) or ".", exist_ok=True)
@@ -53,41 +62,96 @@ class MultiModalPDFIndexService:
     @staticmethod
     def _get_nearby_text(
         text_blocks: Sequence[Dict[str, Any]],
-        anchor_index: int,
-        window: int = 1,
+        anchor_bbox: Dict[str, Any],
+        max_blocks: int = 3,
     ) -> str:
         if not text_blocks:
             return ""
-        start = max(0, anchor_index - window)
-        end = min(len(text_blocks), anchor_index + window + 1)
+        anchor_y = (
+            float(anchor_bbox.get("y0", 0)) + float(anchor_bbox.get("y1", 0))
+        ) / 2
+        ranked = sorted(
+            text_blocks,
+            key=lambda block: (
+                block.get("content_type") != "caption",
+                abs(
+                    (
+                        float((block.get("bbox") or {}).get("y0", 0))
+                        + float((block.get("bbox") or {}).get("y1", 0))
+                    )
+                    / 2
+                    - anchor_y
+                ),
+            ),
+        )
         return "\n".join(
             block.get("content", "")
-            for block in text_blocks[start:end]
+            for block in ranked[:max_blocks]
             if block.get("content")
         ).strip()
 
     def build_text_documents(self, structured_data: Dict[str, Any]) -> List[Document]:
         source_file = structured_data["source_file"]
         documents: List[Document] = []
+        current_heading = ""
 
         for page_data in structured_data.get("pages", []):
-            for text_block in page_data.get("text_blocks", []):
+            blocks = list(page_data.get("text_blocks", []))
+            for table in page_data.get("tables", []):
+                blocks.append(
+                    {
+                        **table,
+                        "block_index": 100000 + int(table.get("table_index", 0)),
+                    }
+                )
+            blocks.sort(key=lambda block: float((block.get("bbox") or {}).get("y0", 0)))
+            page_heading_texts = [
+                str(block.get("content", "")).strip()
+                for block in blocks
+                if block.get("content_type") == "heading" and block.get("content")
+            ]
+            if (
+                current_heading
+                and blocks
+                and blocks[0].get("content_type") != "heading"
+            ):
+                blocks.insert(
+                    0,
+                    {
+                        "block_index": -1,
+                        "content": current_heading,
+                        "content_type": "heading",
+                        "bbox": {},
+                    },
+                )
+
+            parent_id = f"{source_file}:page:{page_data['page']}"
+            page_chunks = self.chunker.chunk_blocks(blocks)
+            for chunk_index, chunk in enumerate(page_chunks):
                 metadata = {
-                    "source": "pdf_text_block",
+                    "source": "pdf_structured_chunk",
                     "source_file": source_file,
                     "page": page_data["page"],
-                    "block_index": text_block["block_index"],
-                    "bbox": json.dumps(text_block["bbox"], ensure_ascii=False),
-                    "content_type": "text_block",
+                    "chunk_index": chunk_index,
+                    "block_indices": json.dumps(chunk.block_indices),
+                    "bbox": json.dumps(chunk.bbox, ensure_ascii=False),
+                    "content_type": ",".join(chunk.content_types),
+                    "heading": chunk.heading,
+                    "parent_id": parent_id,
+                    "chunk_strategy": "structure_aware_v1",
                 }
-                doc_id = DataLoader.generate_hash(text_block["content"], metadata)
+                doc_id = DataLoader.generate_hash(chunk.content, metadata)
                 documents.append(
                     Document(
-                        content=text_block["content"],
+                        content=chunk.content,
                         metadata=metadata,
                         doc_id=doc_id,
                     )
                 )
+            if page_chunks and page_chunks[-1].heading:
+                current_heading = page_chunks[-1].heading
+            elif page_heading_texts:
+                current_heading = " ".join(page_heading_texts)[:200]
         return documents
 
     def build_image_documents(
@@ -110,7 +174,19 @@ class MultiModalPDFIndexService:
                 relative_parts = PurePosixPath(relative_path.replace("\\", "/")).parts
                 stored_path = os.path.join(export_subdir, *relative_parts)
                 image_path = os.path.normpath(os.path.join(export_dir, *relative_parts))
-                nearby_text = self._get_nearby_text(text_blocks, image_entry["image_index"])
+                nearby_text = self._get_nearby_text(
+                    text_blocks, image_entry.get("bbox") or {}
+                )
+                caption = next(
+                    (
+                        block.get("content", "")
+                        for block in text_blocks
+                        if block.get("content_type") == "caption"
+                        and block.get("content")
+                        and block.get("content") in nearby_text
+                    ),
+                    "",
+                )
                 image_hash = image_entry.get("image_hash") or stored_path
 
                 if image_hash not in deduped_images:
@@ -129,6 +205,7 @@ class MultiModalPDFIndexService:
                             "width": image_entry.get("width"),
                             "height": image_entry.get("height"),
                             "nearby_text": nearby_text,
+                            "caption": caption,
                             "content_type": "image",
                             "occurrence_pages": [page_data["page"]],
                             "occurrence_count": 1,
@@ -143,13 +220,17 @@ class MultiModalPDFIndexService:
                     existing_meta["occurrence_pages"].append(page_data["page"])
                 if nearby_text and nearby_text not in existing_meta["nearby_text"]:
                     merged = "\n".join(
-                        part for part in [existing_meta["nearby_text"], nearby_text] if part
+                        part
+                        for part in [existing_meta["nearby_text"], nearby_text]
+                        if part
                     )
                     existing_meta["nearby_text"] = merged[:1000]
 
         for item in deduped_images.values():
             metadata = item["metadata"]
-            metadata["occurrence_pages"] = json.dumps(metadata["occurrence_pages"], ensure_ascii=False)
+            metadata["occurrence_pages"] = json.dumps(
+                metadata["occurrence_pages"], ensure_ascii=False
+            )
             doc_id = DataLoader.generate_hash(item["display_text"], metadata)
             documents.append(
                 Document(
@@ -184,7 +265,7 @@ class MultiModalPDFIndexService:
 
     @staticmethod
     def _batched(items: Sequence[Any], batch_size: int) -> List[Sequence[Any]]:
-        return [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+        return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
     def _embed_text_documents(
         self,
@@ -227,11 +308,15 @@ class MultiModalPDFIndexService:
     ) -> Tuple[int, int]:
         tracking_data = self._load_tracking(tracking_file)
         completed_ids = set(tracking_data.get("completed_text_ids", []))
-        pending_documents = [doc for doc in documents if doc.doc_id not in completed_ids]
+        pending_documents = [
+            doc for doc in documents if doc.doc_id not in completed_ids
+        ]
 
         if not pending_documents:
             if progress_callback:
-                progress_callback(stage="text", event="skipped_all", total=len(documents), pending=0)
+                progress_callback(
+                    stage="text", event="skipped_all", total=len(documents), pending=0
+                )
             return 0, len(documents)
 
         batches = self._batched(pending_documents, batch_size)
@@ -256,7 +341,9 @@ class MultiModalPDFIndexService:
             for future in concurrent.futures.as_completed(future_to_batch):
                 batch = future_to_batch[future]
                 embeddings = future.result()
-                imported_count += self._bulk_import_documents(collection_name, batch, embeddings)
+                imported_count += self._bulk_import_documents(
+                    collection_name, batch, embeddings
+                )
                 completed_ids.update(doc.doc_id for doc in batch)
                 tracking_data["completed_text_ids"] = sorted(completed_ids)
                 self._save_tracking(tracking_file, tracking_data)
@@ -317,7 +404,9 @@ class MultiModalPDFIndexService:
 
         if not pending_pairs:
             if progress_callback:
-                progress_callback(stage="image", event="skipped_all", total=len(documents), pending=0)
+                progress_callback(
+                    stage="image", event="skipped_all", total=len(documents), pending=0
+                )
             return 0, len(documents)
 
         batches = self._batched(pending_pairs, batch_size)
@@ -343,7 +432,9 @@ class MultiModalPDFIndexService:
                 batch = future_to_batch[future]
                 embeddings = future.result()
                 batch_docs = [doc for doc, _ in batch]
-                imported_count += self._bulk_import_documents(collection_name, batch_docs, embeddings)
+                imported_count += self._bulk_import_documents(
+                    collection_name, batch_docs, embeddings
+                )
                 completed_ids.update(doc.doc_id for doc, _ in batch)
                 tracking_data["completed_image_ids"] = sorted(completed_ids)
                 self._save_tracking(tracking_file, tracking_data)
@@ -378,7 +469,9 @@ class MultiModalPDFIndexService:
         structured_data = self._read_structured_json(export_data["json_file"])
 
         text_docs = self.build_text_documents(structured_data)
-        image_docs, image_paths = self.build_image_documents(structured_data, export_dir)
+        image_docs, image_paths = self.build_image_documents(
+            structured_data, export_dir
+        )
         if progress_callback:
             progress_callback(
                 stage="prepare",

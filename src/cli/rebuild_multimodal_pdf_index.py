@@ -11,6 +11,7 @@ from src.api.config import Config
 from src.infrastructure.db_client import DBClient
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
+from src.loaders.pdf_chunker import StructureAwarePDFChunker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,7 +53,15 @@ def main() -> None:
         embed_model=Config.EMBED_MODEL,
     )
     mm_client = MultiModalEmbeddingClient(model=Config.MM_EMBED_MODEL)
-    service = MultiModalPDFIndexService(db_client=db_client, embedding_client=mm_client)
+    service = MultiModalPDFIndexService(
+        db_client=db_client,
+        embedding_client=mm_client,
+        chunker=StructureAwarePDFChunker(
+            target_chars=Config.PDF_CHUNK_TARGET_CHARS,
+            max_chars=Config.PDF_CHUNK_MAX_CHARS,
+            overlap_blocks=Config.PDF_CHUNK_OVERLAP_BLOCKS,
+        ),
+    )
 
     if args.reset:
         db_client.delete_collection(args.text_collection)

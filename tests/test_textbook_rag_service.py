@@ -6,7 +6,7 @@ from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.services.textbook_rag_service import TextbookRAGService
 
 
-def make_service():
+def make_service(**service_kwargs):
     llm_client = MagicMock(spec=LLMClient)
     llm_client.call.return_value = "数据库事务 ACID"
     db_client = MagicMock()
@@ -22,6 +22,7 @@ def make_service():
         ocr_collection_name="ocr_text",
         mm_client=mm_client,
         text_embedding_client=text_client,
+        **service_kwargs,
     )
     return service, db_client, mm_client, text_client
 
@@ -126,6 +127,24 @@ def test_textbook_service_validates_citations_against_selected_context():
     assert service.get_sources(results, reply="错误[3]") == []
 
 
+def test_textbook_service_validates_claim_evidence_alignment():
+    service, _, _, _ = make_service(min_citation_support_score=0.45)
+    results = [
+        (
+            "事务具有原子性、一致性、隔离性和持久性。",
+            {"source_file": "book.pdf", "page": 1},
+            0.9,
+        )
+    ]
+
+    validation = service.validate_citation_grounding(
+        "ACID包括原子性、一致性、隔离性和持久性[1]。", results
+    )
+
+    assert validation.all_claims_cited is True
+    assert validation.all_cited_claims_supported is True
+
+
 def test_textbook_service_requires_at_least_one_evidence_item():
     service, _, _, _ = make_service()
 
@@ -133,3 +152,46 @@ def test_textbook_service_requires_at_least_one_evidence_item():
     assert service.has_evidence([("文本", {}, 0.9)], []) is True
     assert service.has_evidence([], [{"image_ref": "图1", "score": 0.9}]) is True
     assert service.has_evidence([("低相关文本", {}, 0.2)], []) is False
+
+
+def test_textbook_retrieve_fuses_bm25_and_applies_reranker():
+    lexical_retriever = MagicMock()
+    reranker = MagicMock()
+    service, db_client, _, _ = make_service(
+        lexical_retriever=lexical_retriever,
+        reranker=reranker,
+        enable_hybrid_search=True,
+        bm25_candidates=4,
+        enable_reranking=True,
+        rerank_candidates=3,
+    )
+    metadata = {"source_file": "book.pdf", "page": 1, "chunk_index": 0}
+    db_client.search_by_embedding.side_effect = [
+        [("事务具有原子性", metadata, 0.82)],
+        [],
+        [],
+    ]
+    lexical_retriever.search.return_value = [("事务具有原子性", metadata, 4.2)]
+    reranker.rerank.side_effect = lambda **kwargs: kwargs["results"][:2]
+
+    result = service.retrieve("什么是原子性", text_k=2, image_k=1, ocr_k=2)
+
+    lexical_retriever.search.assert_called_once()
+    reranker.rerank.assert_called_once()
+    rerank_candidates = reranker.rerank.call_args.kwargs["results"]
+    assert rerank_candidates[0][1]["retrieval_channels"] == "multimodal_text,bm25"
+    assert rerank_candidates[0][1]["bm25_score"] == 4.2
+    assert result["bm25_results"][0][0] == "事务具有原子性"
+
+
+def test_evidence_policy_prefers_rerank_score_over_dense_score():
+    service, _, _, _ = make_service(min_text_evidence_score=0.5)
+    results = [
+        (
+            "表面相似但不能回答",
+            {"multimodal_text_score": 0.92, "rerank_score": 20},
+            0.2,
+        )
+    ]
+
+    assert service.has_evidence(results, []) is False

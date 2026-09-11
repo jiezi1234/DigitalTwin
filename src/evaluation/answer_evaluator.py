@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from src.infrastructure.llm_client import LLMClient
-from src.rag.citation_validator import CitationValidator
+from src.rag.citation_validator import CitationGroundingValidator, CitationValidator
 
 _JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
 GroundednessJudge = Callable[["AnswerEvaluationCase"], Optional[float]]
@@ -145,6 +145,11 @@ class AnswerEvaluator:
         citation_covered = 0
         keyword_recalls = []
         groundedness_scores = []
+        total_claims = 0
+        cited_claims = 0
+        supported_claims = 0
+        answers_with_claims = 0
+        fully_supported_answers = 0
         details = []
 
         for case in cases:
@@ -155,6 +160,17 @@ class AnswerEvaluator:
             validation = CitationValidator.validate(
                 case.answer, context_count=len(case.contexts)
             )
+            grounding = CitationGroundingValidator().validate(
+                case.answer, case.contexts
+            )
+            total_claims += grounding.claim_count
+            cited_claims += grounding.cited_claim_count
+            supported_claims += grounding.supported_claim_count
+            if grounding.claim_count:
+                answers_with_claims += 1
+                fully_supported_answers += int(
+                    grounding.all_claims_cited and grounding.all_cited_claims_supported
+                )
             total_citations += len(validation.cited_indices)
             valid_citations += len(validation.valid_indices)
             if case.answerable and not abstained:
@@ -184,6 +200,7 @@ class AnswerEvaluator:
                     "keyword_recall": keyword_recall,
                     "groundedness": groundedness,
                     "citation_validation": validation.to_dict(),
+                    "citation_grounding": grounding.to_dict(),
                 }
             )
 
@@ -206,6 +223,17 @@ class AnswerEvaluator:
                 "groundedness": (
                     statistics.fmean(groundedness_scores)
                     if groundedness_scores
+                    else None
+                ),
+                "citation_claim_coverage": (
+                    cited_claims / total_claims if total_claims else None
+                ),
+                "citation_support_precision": (
+                    supported_claims / cited_claims if cited_claims else None
+                ),
+                "fully_supported_answer_rate": (
+                    fully_supported_answers / answers_with_claims
+                    if answers_with_claims
                     else None
                 ),
             },

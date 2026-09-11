@@ -105,6 +105,17 @@ class Config:
     TUTOR_TEXT_TOP_K = int(os.getenv("TUTOR_TEXT_TOP_K", "8"))
     TUTOR_IMAGE_TOP_K = int(os.getenv("TUTOR_IMAGE_TOP_K", "4"))
     TUTOR_OCR_TOP_K = int(os.getenv("TUTOR_OCR_TOP_K", "8"))
+    TUTOR_HYBRID_SEARCH_ENABLED = (
+        os.getenv("TUTOR_HYBRID_SEARCH_ENABLED", "true").lower() == "true"
+    )
+    TUTOR_BM25_CANDIDATES = int(os.getenv("TUTOR_BM25_CANDIDATES", "30"))
+    TUTOR_RRF_K = int(os.getenv("TUTOR_RRF_K", "60"))
+    TUTOR_MM_TEXT_WEIGHT = float(os.getenv("TUTOR_MM_TEXT_WEIGHT", "1.0"))
+    TUTOR_OCR_TEXT_WEIGHT = float(os.getenv("TUTOR_OCR_TEXT_WEIGHT", "0.9"))
+    TUTOR_BM25_WEIGHT = float(os.getenv("TUTOR_BM25_WEIGHT", "0.8"))
+    TUTOR_RERANK_ENABLED = os.getenv("TUTOR_RERANK_ENABLED", "true").lower() == "true"
+    TUTOR_RERANK_MODEL = os.getenv("TUTOR_RERANK_MODEL", "qwen-turbo")
+    TUTOR_RERANK_CANDIDATES = int(os.getenv("TUTOR_RERANK_CANDIDATES", "20"))
     PDF_EXPORT_ROOT = os.path.abspath(
         os.getenv("PDF_EXPORT_ROOT", os.path.join(PROJECT_ROOT, "output"))
     )
@@ -124,6 +135,12 @@ class Config:
         os.getenv("TUTOR_MIN_IMAGE_EVIDENCE_SCORE", "0.45")
     )
     TUTOR_MIN_EVIDENCE_ITEMS = int(os.getenv("TUTOR_MIN_EVIDENCE_ITEMS", "1"))
+    TUTOR_MIN_CITATION_SUPPORT_SCORE = float(
+        os.getenv("TUTOR_MIN_CITATION_SUPPORT_SCORE", "0.45")
+    )
+    PDF_CHUNK_TARGET_CHARS = int(os.getenv("PDF_CHUNK_TARGET_CHARS", "800"))
+    PDF_CHUNK_MAX_CHARS = int(os.getenv("PDF_CHUNK_MAX_CHARS", "1200"))
+    PDF_CHUNK_OVERLAP_BLOCKS = int(os.getenv("PDF_CHUNK_OVERLAP_BLOCKS", "1"))
     TUTOR_SYSTEM_PROMPT = os.getenv(
         "TUTOR_SYSTEM_PROMPT",
         """你是一位数据库课程的数字助教。你的职责是基于课本内容帮助学生理解数据库相关知识。
@@ -132,7 +149,7 @@ class Config:
 1. 基于提供的课本内容准确回答学生问题。
 2. 回答要清晰、易懂，适当使用示例和类比帮助理解。
 3. 对于SQL相关问题，提供具体的SQL语句示例。
-4. 在回答中引用课本内容时，使用对应的编号标注，如 [1][3]。只引用你实际使用的段落编号。
+4. 每个来自教材的事实结论句都必须在句末标注实际支撑它的段落编号，如 [1][3]；不要把一个无关引用挂在整段末尾，也不要引用未使用的段落。
 5. 如果课本证据不足，明确说明“教材资料中没有足够信息”；不要把模型常识伪装成教材结论。确需补充常识时，必须标注“补充说明（非教材内容）”且不添加教材引用。
 6. 鼓励学生思考，可以适当提出引导性问题。
 7. 使用中文回答。""",

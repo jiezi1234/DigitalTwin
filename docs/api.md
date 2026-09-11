@@ -535,7 +535,9 @@ class RAGService:
         """获取集合统计信息"""
 ```
 
-`TextbookRAGService.assess_evidence(text_results, image_results)` 返回结构化证据判断，包含 `sufficient`、文本/图片最高分、达到阈值的证据数量和 `reason`。`/api/tutor/chat` 的 `quality.evidence` 返回同一结构；`reason` 可能为 `sufficient`、`no_evidence`、`below_threshold` 或 `insufficient_items`。
+`TextbookRAGService.assess_evidence(text_results, image_results)` 返回结构化证据判断，包含 `sufficient`、文本/图片最高分、达到阈值的证据数量和 `reason`。`/tutor/chat` 的 `quality.evidence` 返回同一结构；`reason` 可能为 `sufficient`、`no_evidence`、`below_threshold` 或 `insufficient_items`。
+
+`quality.citation_grounding` 返回 `claim_count`、`citation_coverage`、`citation_support_precision`、未引用事实句和证据不支持的引用句；`citation_quality_passed` 表示引用编号合法、事实句引用完整且已引用句均达到支持阈值。该字段用于质量监控，不会触发在线重试。
 
 ### TextbookRAGService
 
@@ -601,9 +603,22 @@ RAG_CONTEXT_RECORD_MAX_CHARS=500 # 单片段字符上限
 RAG_CONTEXT_DEDUP_THRESHOLD=0.90 # 近重复判定阈值
 TUTOR_REQUIRE_EVIDENCE=true    # 无文本和图片证据时直接拒答
 TUTOR_NO_EVIDENCE_RESPONSE=当前教材资料中没有足够信息回答这个问题。
+TUTOR_HYBRID_SEARCH_ENABLED=true # 教材 Dense/OCR/BM25 混合召回
+TUTOR_BM25_CANDIDATES=30
+TUTOR_RRF_K=60
+TUTOR_MM_TEXT_WEIGHT=1.0
+TUTOR_OCR_TEXT_WEIGHT=0.9
+TUTOR_BM25_WEIGHT=0.8
+TUTOR_RERANK_ENABLED=true
+TUTOR_RERANK_MODEL=qwen-turbo
+TUTOR_RERANK_CANDIDATES=20
 TUTOR_MIN_TEXT_EVIDENCE_SCORE=0.45  # 文本证据阈值，需用标注集校准
 TUTOR_MIN_IMAGE_EVIDENCE_SCORE=0.45 # 图片证据阈值，需用标注集校准
 TUTOR_MIN_EVIDENCE_ITEMS=1          # 至少达到阈值的证据数量
+TUTOR_MIN_CITATION_SUPPORT_SCORE=0.45 # 句子与引用内容的最低词汇支持度
+PDF_CHUNK_TARGET_CHARS=800
+PDF_CHUNK_MAX_CHARS=1200
+PDF_CHUNK_OVERLAP_BLOCKS=1
 EVAL_ANSWER_DATASET=./evaluation/answer_cases.jsonl
 EVAL_JUDGE_MODEL=qwen-turbo    # 仅离线忠实度评测使用
 EVAL_EVIDENCE_DATASET=./evaluation/evidence_calibration.jsonl

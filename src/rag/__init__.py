@@ -4,7 +4,12 @@ from src.rag.bm25_retriever import BM25Retriever
 from src.rag.llm_reranker import LLMReranker
 from src.rag.metadata_filter import MetadataFilterBuilder
 from src.rag.context_builder import ContextBuilder, ContextBuildResult
-from src.rag.citation_validator import CitationValidation, CitationValidator
+from src.rag.citation_validator import (
+    CitationGroundingValidation,
+    CitationGroundingValidator,
+    CitationValidation,
+    CitationValidator,
+)
 from src.rag.evidence_policy import EvidenceAssessment, EvidenceConfidencePolicy
 
 __all__ = [
@@ -19,6 +24,8 @@ __all__ = [
     "ContextBuildResult",
     "CitationValidation",
     "CitationValidator",
+    "CitationGroundingValidation",
+    "CitationGroundingValidator",
     "EvidenceAssessment",
     "EvidenceConfidencePolicy",
 ]

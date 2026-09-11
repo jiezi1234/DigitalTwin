@@ -16,8 +16,11 @@ from src.services.textbook_rag_service import TextbookRAGService
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
 from src.rag.context_builder import ContextBuilder
-from src.rag.citation_validator import CitationValidator
+from src.rag.citation_validator import CitationGroundingValidator, CitationValidator
 from src.rag.evidence_policy import EvidenceAssessment, EvidenceConfidencePolicy
+from src.rag.bm25_retriever import BM25Retriever
+from src.rag.llm_reranker import LLMReranker
+from src.loaders.pdf_chunker import StructureAwarePDFChunker
 
 logger = logging.getLogger(__name__)
 tutor_bp = Blueprint("tutor", __name__)
@@ -38,10 +41,25 @@ def _quality_payload(reply, results, service, evidence_assessment):
         if service
         else CitationValidator.validate(reply, context_count=len(results))
     )
+    grounding = (
+        service.validate_citation_grounding(reply, results)
+        if service
+        else CitationGroundingValidator(
+            Config.TUTOR_MIN_CITATION_SUPPORT_SCORE
+        ).validate(reply, results)
+    )
     return {
         "evidence_sufficient": evidence_assessment.sufficient,
         "evidence": evidence_assessment.to_dict(),
         "citation_validation": validation.to_dict(),
+        "citation_grounding": grounding.to_dict(),
+        "citation_quality_passed": (
+            not validation.invalid_indices
+            and (
+                grounding.claim_count == 0
+                or (grounding.all_claims_cited and grounding.all_cited_claims_supported)
+            )
+        ),
     }
 
 
@@ -111,6 +129,17 @@ def get_tutor_service():
                 min_text_evidence_score=Config.TUTOR_MIN_TEXT_EVIDENCE_SCORE,
                 min_image_evidence_score=Config.TUTOR_MIN_IMAGE_EVIDENCE_SCORE,
                 min_evidence_items=Config.TUTOR_MIN_EVIDENCE_ITEMS,
+                lexical_retriever=BM25Retriever(db_client),
+                reranker=LLMReranker(llm_client, model=Config.TUTOR_RERANK_MODEL),
+                enable_hybrid_search=Config.TUTOR_HYBRID_SEARCH_ENABLED,
+                bm25_candidates=Config.TUTOR_BM25_CANDIDATES,
+                rrf_k=Config.TUTOR_RRF_K,
+                mm_text_weight=Config.TUTOR_MM_TEXT_WEIGHT,
+                ocr_text_weight=Config.TUTOR_OCR_TEXT_WEIGHT,
+                bm25_weight=Config.TUTOR_BM25_WEIGHT,
+                enable_reranking=Config.TUTOR_RERANK_ENABLED,
+                rerank_candidates=Config.TUTOR_RERANK_CANDIDATES,
+                min_citation_support_score=Config.TUTOR_MIN_CITATION_SUPPORT_SCORE,
             )
         except Exception as e:
             logger.warning(f"助教服务初始化失败 (可能未导入课本): {e}")
@@ -153,6 +182,7 @@ def tutor_chat():
             )
             results = retrieval["text_results"]
             ocr_results = retrieval["ocr_text_results"]
+            bm25_results = retrieval.get("bm25_results", [])
             image_results = retrieval["image_results"]
             if results:
                 context_build = service.build_context(
@@ -164,10 +194,11 @@ def tutor_chat():
                 image_context = service.format_image_context(image_results)
                 image_hits = service.serialize_images(image_results)
             logger.info(
-                "[Tutor Retrieval] session=%s text_hits=%d ocr_hits=%d image_hits=%d vl_model=%s",
+                "[Tutor Retrieval] session=%s text_hits=%d ocr_hits=%d bm25_hits=%d image_hits=%d vl_model=%s",
                 session_id,
                 len(results),
                 len(ocr_results),
+                len(bm25_results),
                 len(image_hits),
                 Config.TUTOR_VL_MODEL,
             )
@@ -330,6 +361,11 @@ def tutor_import():
             index_service = MultiModalPDFIndexService(
                 db_client=db_client,
                 embedding_client=mm_client,
+                chunker=StructureAwarePDFChunker(
+                    target_chars=Config.PDF_CHUNK_TARGET_CHARS,
+                    max_chars=Config.PDF_CHUNK_MAX_CHARS,
+                    overlap_blocks=Config.PDF_CHUNK_OVERLAP_BLOCKS,
+                ),
             )
             pattern = os.path.join(Config.PROJECT_ROOT, "data/pdf/*.pdf")
             index_service.index_pattern(

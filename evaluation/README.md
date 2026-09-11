@@ -49,7 +49,12 @@ python -m src.cli.evaluate_answers --dataset evaluation/answer_cases.jsonl
 - `abstention_accuracy`：可回答问题正常回答、不可回答问题正确拒答的比例。
 - `citation_precision`：回答中的文本引用有多少落在有效上下文编号内。
 - `citation_coverage`：可回答且未拒答的样本中，有多少至少包含一个有效引用。
+- `citation_claim_coverage`：回答中的事实句有多少带有合法文本引用。
+- `citation_support_precision`：已引用事实句中，有多少与所引证据达到最低词汇支持度。
+- `fully_supported_answer_rate`：有事实陈述的回答中，引用完整且全部达到支持阈值的比例。
 - `answer_keyword_recall`：人工标注关键词在答案中的覆盖率。
+
+句子级支持度是低成本确定性检查，用于发现“挂了合法编号但内容明显不相关”的回答；它不等同于语义蕴含。需要判断同义改写、否定和数值冲突时，仍应结合 `--llm-judge` 与人工抽检。
 
 需要语义级忠实度时显式添加 `--llm-judge`。该模式每个样本增加一次模型调用，
 输出 `groundedness`，适合在小规模人工复核集上运行；不要把未经人工抽检的模型评分直接写进简历。

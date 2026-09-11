@@ -21,6 +21,7 @@ from src.infrastructure.document import Document
 from src.infrastructure.multimodal_embedding_client import MultiModalEmbeddingClient
 from src.infrastructure.text_embedding_client import TextEmbeddingClient
 from src.loaders.pdf_loader import PDFLoader
+from src.loaders.pdf_chunker import StructureAwarePDFChunker
 from src.services.multimodal_pdf_service import MultiModalPDFIndexService
 
 try:
@@ -155,6 +156,11 @@ def _index_single_multimodal_pdf(args, pdf_path: str, tracking_dir: str, progres
     service = MultiModalPDFIndexService(
         db_client=db_client,
         embedding_client=MultiModalEmbeddingClient(model=args.mm_model),
+        chunker=StructureAwarePDFChunker(
+            target_chars=Config.PDF_CHUNK_TARGET_CHARS,
+            max_chars=Config.PDF_CHUNK_MAX_CHARS,
+            overlap_blocks=Config.PDF_CHUNK_OVERLAP_BLOCKS,
+        ),
     )
     tracking_file = os.path.join(
         tracking_dir,
@@ -489,6 +495,9 @@ def main() -> None:
         filepath=args.textbook_file,
         ocr_enabled=True,
         ocr_language=args.ocr_language,
+        chunk_size=Config.PDF_CHUNK_TARGET_CHARS,
+        chunk_max_size=Config.PDF_CHUNK_MAX_CHARS,
+        chunk_overlap_blocks=Config.PDF_CHUNK_OVERLAP_BLOCKS,
     )
     pages_data = _ocr_textbook_with_progress(
         pdf_path=args.textbook_file,

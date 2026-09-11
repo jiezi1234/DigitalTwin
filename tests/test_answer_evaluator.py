@@ -73,6 +73,9 @@ def test_answer_evaluator_computes_citation_abstention_and_coverage_metrics():
         "citation_coverage": 1.0,
         "answer_keyword_recall": 1.0,
         "groundedness": None,
+        "citation_claim_coverage": 1.0,
+        "citation_support_precision": 1.0,
+        "fully_supported_answer_rate": 1.0,
     }
 
 
